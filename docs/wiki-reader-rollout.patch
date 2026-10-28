@@ -1,0 +1,158 @@
+diff --git a/digital-makerspace/admin/nfc-readers.md b/digital-makerspace/admin/nfc-readers.md
+new file mode 100644
+--- /dev/null
++++ b/digital-makerspace/admin/nfc-readers.md
+@@ -0,0 +1,49 @@
++---
++title: Manage NFC Readers
++description: Configure an ESP32 reader, enroll assigned fobs, inspect its cache and update firmware.
++published: true
++date: 2026-10-28T04:00:00.000Z
++tags: admin, access, nfc
++editor: markdown
++dateCreated: 2026-10-28T04:00:00.000Z
++---
++
++# Manage NFC Readers
++
++Use the station's HTTPS management address and its assigned administrator username and password. These credentials are separate from your member-portal login. Only operators responsible for access equipment should have them.
++
++## Configure a station
++
++Open **Configuration**, enter a unique **Device name**, and select its **Role**. Door opens for 10 seconds, garagedoor for 30, test for 9, and latch for 5. Tool toggles on each accepted scan and needs the configured **Tool ID** plus a current checkout for that tool.
++
++Stop the relay before changing settings. **Save and synchronize** must reach the server before the change is applied. If the server rejects the change or is unavailable, correct the problem and save again.
++
++## Enroll an assigned fob
++
++First assign the fob to the correct member through the normal member-portal workflow. On a supervised station, check **Enrollment station**, then choose **Save and synchronize**.
++
++Hold the assigned fob at the reader until feedback appears. The station provisions its protected credential and verifies it before recording enrollment. An unknown fob is rejected and left untouched. Enrollment does not make an expired, lost, revoked or otherwise ineligible membership valid.
++
++After enrollment, choose **Disable enrollment locally now**. This works even when the network is unavailable. A failed or interrupted enrollment may be retried at an enabled station; ask an access-system maintainer to inspect a fob that repeatedly fails. Do not repeatedly rewrite an unrelated or nonblank fob.
++
++## Inspect the reader
++
++**Statistics** shows network/API/MQTT/NFC state, clock trust, relay state, memory and audit-loss counters. A clock that cannot be trusted prevents admission. A production security configuration that is not ready also prevents admission.
++
++**cacheKeyReady** must be true before scans are enabled. If it is false or configuration reports **Cache key unavailable; restore configuration and restart**, record **lastError** and contact the access-system maintainer. Keep NVS and flash intact: deleting a key can make cached cards and unsent records unreadable. The maintainer must restore the original configuration/state or deliberately reprovision the device, then restart it. Management pages remain available during this fault.
++
++**Cards** searches the local cache by UID or holder. FirstScan is the first recorded presentation at this station, expressed in epoch milliseconds. **Never scanned** means no presentation was recorded; **Time unavailable** means the presentation occurred without a recoverable timestamp. Card keys are never shown.
++
++**Checkouts** lists cached grants for a tool station. An active membership alone does not authorize a tool. The member also needs a current checkout, and the tool and shop must be available.
++
++## Update firmware
++
++With the relay off, open **Update** and select the maintainer-provided signed firmware image. The reader disables access during the update and reboots after success. Filesystem uploads are not supported because they would replace the local cache and unsent activity records.
++
++Keep power connected. After reboot, check **Statistics**, the station name/role, cached FirstScan values and a supervised test scan. Contact the maintainer if the previous firmware returns or the new firmware does not become healthy.
++
++## Network outages
++
++A reader can use an already cached, authenticated, unexpired card while offline. It cannot learn a new revocation until connectivity returns. New or unenrolled cards require a server connection. Activity records wait in flash and retry automatically; **auditLoss** means records were lost because of storage failure or spool overflow.
++
++Report the station name, approximate time and displayed rejection to the maintainer. Do not clear flash or reset credentials as a troubleshooting shortcut.
+diff --git a/digital-makerspace/troubleshooting.md b/digital-makerspace/troubleshooting.md
+--- a/digital-makerspace/troubleshooting.md
++++ b/digital-makerspace/troubleshooting.md
+@@ -1,95 +1,99 @@
+ ---
+ title: Troubleshooting
+ description: Why didn't that work? Quick answers for members about logging in, payments, key fobs, invitations, checkouts and rentals.
+ published: true
+ date: 2026-10-21T16:00:00.000Z
+ tags: troubleshooting, members, help
+ editor: markdown
+ dateCreated: 2020-01-22T13:33:00.704Z
+ ---
+ 
+ # Troubleshooting
+ 
+ Something did not happen the way you expected? Find your situation below. If you cannot fix it yourself, ask in **#discuss-talk-to-the-board** on Slack, or come to an open house.
+ 
+ ## Signing in
+ 
+ ### I cannot sign in, or I forgot my password
+ 
+ On the sign-in page choose **Forgot your password?**, enter the email address on your membership, and submit. Check your spam folder, because the email comes from the makerspace. The link in the email works for 24 hours. If it has expired, request a new one. You can also sign in with a connected Google, Apple, GitHub or Microsoft account if you set one up. See [Log In](/digital-makerspace/log-in).
+ 
+ ### I never set a password
+ 
+ If a board member or admin created your account, it has no password yet. Use **Forgot your password?** to set one.
+ 
+ ### The email address is wrong, or I changed it
+ 
+ Ask a board member to correct the email on your membership. Your Slack and Google Drive access follow the email on your membership.
+ 
+ ## Your membership and key fob
+ 
+ ### I paid, but my membership is not active
+ 
+ Your membership time starts when you receive your key fob, not when you pay, and you do not lose any time while you wait. Come to an open house for your orientation and fob, or ask in #discuss-talk-to-the-board. If a long time passes between paying and getting your fob, your billing date and your expiration date will not match. That is normal.
+ 
+ ### My key fob does not open the door
+ 
+ A fob works only while your membership is active and not expired, and only if it is registered to you. Check your expiration date on the portal's **Home** page. A fob that was reported lost or stolen is turned off on purpose. Ask the board or come to an open house for a replacement.
+ 
++### A new reader says my fob is unenrolled or authentication failed
++
++Ask an access-system maintainer to check the fob's assignment and enroll it at a supervised station. Do not try to solve this by copying a fob UID. For a tool reader, also check that you have a current checkout for that tool. See [Manage NFC Readers](/digital-makerspace/admin/nfc-readers).
++
+ ### My expiration date looks wrong
+ 
+ Look at **Subscriptions** in the portal menu. If you pay by subscription, the date moves forward after each successful payment. If something does not look right, tell the board.
+ 
+ ## Payments
+ 
+ ### My payment failed
+ 
+ You should get an email, and a Slack message if your Slack account is linked. The message includes the reason. Open **Payment Methods** in the portal menu to add a new card or change the one on file, then pay what is due from the **Dues** tab on your profile. A failed subscription payment is also tried again automatically. See [Making Payments](/digital-makerspace/payments).
+ 
+ ### I was charged and I think it was a mistake
+ 
+ Refunds are generally not given. See [Payment History and Refunds](/digital-makerspace/refunds) for what to do.
+ 
+ ### I do not want to renew
+ 
+ Cancel your subscription before the renewal date. See [Manage Membership](/digital-makerspace/manage-membership).
+ 
+ ## Invitations and messages
+ 
+ ### I never got my Slack or Google Drive invitation
+ 
+ Your Slack invitation is sent once your membership is active. The Google Drive invitation also needs your key fob to be registered. Both can take a little while after you join, because they are sent in batches. Check your spam folder, and make sure you are checking the email address on your membership. If it still has not arrived, ask in #discuss-talk-to-the-board.
+ 
+ ### I am not getting emails or Slack messages
+ 
+ Check your spam folder first. Billing and rental messages are always sent. If you unsubscribed from makerspace emails, you will still get these. Messages in Slack only reach you if your Slack account is linked to your membership. Slack accounts are matched to members by email address.
+ 
+ ## Tools
+ 
+ ### I cannot request a checkout, or my request has not been approved
+ 
+ See [Troubleshooting: Tool Checkouts](/digital-makerspace/troubleshooting/checkouts). It explains every message you can see and what to do.
+ 
+ ## Storage rentals
+ 
+ ### I cannot rent a space
+ 
+ You need an active membership and no past-due invoices. See [Rent a Storage Space](/digital-makerspace/members/rent-a-space), which has a table of the messages you may see.
+ 
+ ## Volunteering
+ 
+ ### My volunteer work does not show yet
+ 
+ Points are added after the work is reviewed. If you completed a task, mark it complete in the **Volunteer** tab on your profile, then ask in #discuss-talk-to-the-board if it has not been recognized after a few days.
+ 
+ ## The portal itself
+ 
+ ### A page will not load, or something looks wrong
+ 
+ Use the **Retry** button if you see one. If the page is still broken, sign out and back in, then try another browser. If it keeps happening, tell the board what you were doing and what you saw, and include the time.
+ 
+ ### I cannot find something in the menu
+ 
+ Some menu items depend on your role. See [The Member Portal Home Page and Menu](/digital-makerspace/members/home-and-navigation).
+ 
+ *Last reviewed: October 2026*
+
