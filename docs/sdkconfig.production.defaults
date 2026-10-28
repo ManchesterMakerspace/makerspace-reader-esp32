@@ -1,0 +1,13 @@
+# Apply to an Arduino 3.3.12 core rebuilt with ESP-IDF 5.5, NOT build_opt.h.
+# Provisioning burns irreversible eFuses. Review generated sdkconfig and bootloader
+# layout on a sacrificial board before production; this file does not burn anything.
+CONFIG_SECURE_BOOT=y
+CONFIG_SECURE_BOOT_V2_ENABLED=y
+CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=y
+CONFIG_SECURE_FLASH_ENC_ENABLED=y
+CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE=y
+CONFIG_NVS_ENCRYPTION=y
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# Set signing key path securely in the build environment/menuconfig.
+# CONFIG_SECURE_SIGNED_APPS is derived by the SDK; the reader checks it at runtime
+# together with secure-boot and flash-encryption eFuse state
