@@ -1,0 +1,11 @@
+MakerspaceReader/secrets.h
+build/
+.arduino/
+arduino-cli.yaml
+*.log
+*.pem
+*.key
+sdkconfig
+sdkconfig.old
+.tools/
+.test-build/
