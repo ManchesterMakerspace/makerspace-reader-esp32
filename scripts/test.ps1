@@ -3,6 +3,12 @@ $readerRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Push-Location $readerRoot
 try {
  New-Item -ItemType Directory -Force .test-build | Out-Null
+ # Compile the production relay implementation with hardware/state test doubles.
+ Copy-Item MakerspaceReader/Relay.cpp .test-build/Relay.cpp -Force
+ & g++ -std=c++11 -Wall -Wextra -Werror -I tests/relay-fakes tests/relay.cpp .test-build/Relay.cpp -o .test-build/relay-tests.exe
+ if($LASTEXITCODE -ne 0){throw 'Relay test compilation failed'}
+ & ./.test-build/relay-tests.exe
+ if($LASTEXITCODE -ne 0){throw 'Relay tests failed'}
  & g++ -std=c++11 -Wall -Wextra -Werror tests/policy.cpp -o .test-build/policy-tests.exe
  if($LASTEXITCODE -ne 0){throw 'Policy test compilation failed'}
  & ./.test-build/policy-tests.exe

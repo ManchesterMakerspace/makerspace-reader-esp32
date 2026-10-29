@@ -274,8 +274,12 @@ static void scan(const String &uid, bool classic) {
     enrollment = configuration["enrollmentEnabled"] | false;
   }
   if (classic && !card.id.isEmpty() && card.key.isEmpty() && enrollment && !maintenance &&
-      !deviceBlocked)
-    fresh |= enroll(card);
+      !deviceBlocked) {
+    bool enrolled = enroll(card);
+    if (!enrolled)
+      log_e("NFC enrollment failed; card was not authorized");
+    fresh |= enrolled;
+  }
   if (fresh) {
     {
       Lock s(stateMutex);
@@ -297,6 +301,7 @@ static void scan(const String &uid, bool classic) {
       }
       if (cards.count(uid.c_str()) || cards.size() < 300)
         cards[uid.c_str()] = card;
+      recheckActiveTool();
     }
     saveState();
   }
@@ -316,6 +321,7 @@ static void scan(const String &uid, bool classic) {
     if (!verify(card)) {
       allow = false;
       reason = "authenticationFailed";
+      log_e("NFC credential authentication/read verification failed");
     }
   }
   // Recheck authorization after RF/network work, including concurrent invalidations.
@@ -336,18 +342,12 @@ static void scan(const String &uid, bool classic) {
         it->second.id == card.id && authorize(it->second, reason, until)) {
       String role = configuration["role"] | "";
       if (role == "tool") {
-        bool on = !relayOn;
-        digitalWrite(RELAY_PIN, on ? HIGH : LOW);
-        relayOn = on;
-        toolDeadline = on ? until : 0;
-        relayDeadline = 0;
-        activeUid = uid;
+        if (relayOn)
+          stopRelay();
+        else
+          startRelay(until - epochMs(), until, uid);
       } else {
-        int seconds = policy::pulseSeconds(role.c_str());
-        relayDeadline = esp_timer_get_time() + int64_t(seconds) * 1000000;
-        toolDeadline = 0;
-        digitalWrite(RELAY_PIN, HIGH);
-        relayOn = true;
+        startRelay(int64_t(policy::pulseSeconds(role.c_str())) * 1000, 0, "");
       }
       accepted++;
     } else {
@@ -383,6 +383,7 @@ static bool initializeNfc() {
   controller = nfcProtocol::select(have7160, !have7160 && probe(Pn532::address));
   bool ok = false;
   if (controller == nfcProtocol::Controller::pn7160) {
+    log_i("I2C device found: PN7160 at 0x28");
     pinMode(NFC_IRQ, INPUT_PULLDOWN);
     attachInterrupt(NFC_IRQ, nfcInterrupt, RISING);
     nfc.setI2CPins(1, 2);
@@ -391,12 +392,19 @@ static bool initializeNfc() {
     ok =
         !nfc.connectNCI() && !nfc.configureSettings() && !nfc.configMode() && !nfc.startDiscovery();
   } else if (controller == nfcProtocol::Controller::pn532) {
+    log_i("I2C device found: PN532 at 0x24");
     pinMode(NFC_IRQ, INPUT_PULLUP);
     attachInterrupt(NFC_IRQ, nfcInterrupt, FALLING);
     ok = pn532.begin() && pn532.startDetection();
   }
   Wire.setClock(100000);
   Wire.setTimeOut(50);
+  if (ok)
+    log_i("NFC reader initialized successfully: %s", nfcControllerName());
+  else if (controller == nfcProtocol::Controller::none)
+    log_e("No NFC reader found: PN7160 at 0x28 and PN532 at 0x24 did not respond; retrying");
+  else
+    log_e("NFC reader initialization failed: %s; retrying", nfcControllerName());
   // A present but failing PN7160 is retried, never silently bypassed by PN532.
   return ok;
 }
@@ -407,11 +415,14 @@ void nfcTask(void *) {
     Wire.beginTransmission(0x72);
     haveLcd = Wire.endTransmission() == 0;
     if (haveLcd) {
+      log_i("I2C device found: SerLCD at 0x72");
       lcd.begin(Wire);
       lcd.setBacklight(0x0000FF);
       lcd.print("Starting reader");
     }
     haveBuzzer = buzzer.begin();
+    if (haveBuzzer)
+      log_i("I2C device found: Qwiic buzzer at 0x34");
     nfcOK = initializeNfc();
   }
   String previous;
@@ -445,6 +456,7 @@ void nfcTask(void *) {
         if (detected) {
           selectedUidLength = nfc.remoteDevice.getNFCIDLen();
           if (selectedUidLength != 4 && selectedUidLength != 7 && selectedUidLength != 10) {
+            log_e("PN7160 returned invalid UID length: %u", unsigned(selectedUidLength));
             nfcOK = false;
             continue;
           }
@@ -456,6 +468,8 @@ void nfcTask(void *) {
         detected = nfcOK && selectedUidLength != 0;
         if (nfcOK && !detected)
           nfcOK = pn532.startDetection();
+        if (!nfcOK)
+          log_e("PN532 detection/rearm failed");
       }
       if (detected)
         uid = hexBytes(selectedUid, selectedUidLength);
@@ -470,6 +484,8 @@ void nfcTask(void *) {
         nfcOK = controller == nfcProtocol::Controller::pn7160
                     ? nfc.reset()
                     : pn532.release() && pn532.startDetection();
+        if (!nfcOK)
+          log_e("NFC reader reset/rearm failed: %s", nfcControllerName());
       }
     } else if (millis() - lastSeen >= 500)
       previous = "";

@@ -57,7 +57,7 @@ static bool storageFailure(const char *message) {
   storageOK = false;
   cacheKeyReady = false;
   memset(cacheEncryptionKey, 0, sizeof(cacheEncryptionKey));
-  Serial.println(message); // Diagnostic only; never print key material.
+  log_e("%s", message); // Never print key material.
   return false;
 }
 bool initializeStorage() {
@@ -152,15 +152,20 @@ bool decodeHex(const String &s, uint8_t *out, size_t n) {
   }
   return true;
 }
+static bool cacheFailure(const String &path, const char *operation) {
+  log_e("Cache %s failed: %s", operation, path.c_str());
+  storageOK = false;
+  return false;
+}
 bool sealWrite(const String &path, const String &data) {
   Lock lock(fsMutex);
   uint8_t iv[12], tag[16];
   if (!cacheKeyReady)
-    return false;
+    return cacheFailure(path, "key unavailable");
   // Reserve each nonce in durable NVS before use; reset requires a new key.
   uint64_t seq = prefs.getULong64("nonce", 0) + 1;
-  if (!seq || prefs.putULong64("nonce", seq) != 8)
-    return false;
+  if (!seq || !checkNvsWrite("nonce", prefs.putULong64("nonce", seq), 8))
+    return cacheFailure(path, "nonce reservation");
   memset(iv, 0, 12);
   memcpy(iv + 4, &seq, 8);
   std::vector<uint8_t> cipher(data.length());
@@ -172,33 +177,37 @@ bool sealWrite(const String &path, const String &data) {
                                    (const uint8_t *)path.c_str(), path.length(),
                                    (const uint8_t *)data.c_str(), cipher.data(), 16, tag);
   mbedtls_gcm_free(&ctx);
-  if (rc)
-    return false;
+  if (rc) {
+    log_e("Cache cryptographic operation failed: rc=%d", rc);
+    return cacheFailure(path, "encryption/authentication");
+  }
   File f = LittleFS.open(path + ".tmp", "w");
   if (!f)
-    return false;
+    return cacheFailure(path, "open for write");
   bool ok = f.write(iv, 12) == 12 && f.write(tag, 16) == 16 &&
             f.write(cipher.data(), cipher.size()) == cipher.size();
   f.flush();
   f.close();
   if (!ok)
-    return false;
-  return LittleFS.rename(path + ".tmp", path);
+    return cacheFailure(path, "write");
+  if (!LittleFS.rename(path + ".tmp", path))
+    return cacheFailure(path, "rename");
+  return true;
 }
 bool sealRead(const String &path, String &data) {
   Lock lock(fsMutex);
   File f = LittleFS.open(path, "r");
   if (!f || f.size() < 28 || f.size() > 524288)
-    return false;
+    return cacheFailure(path, "open/read size validation");
   uint8_t iv[12], tag[16];
   if (!cacheKeyReady)
-    return false;
-  f.read(iv, 12);
-  f.read(tag, 16);
+    return cacheFailure(path, "key unavailable");
+  if (f.read(iv, 12) != 12 || f.read(tag, 16) != 16)
+    return cacheFailure(path, "header read");
   size_t n = f.size() - 28;
   std::vector<uint8_t> cipher(n), plain(n + 1);
   if (f.read(cipher.data(), n) != n)
-    return false;
+    return cacheFailure(path, "read");
   f.close();
   mbedtls_gcm_context ctx;
   mbedtls_gcm_init(&ctx);
@@ -207,8 +216,10 @@ bool sealRead(const String &path, String &data) {
     rc = mbedtls_gcm_auth_decrypt(&ctx, n, iv, 12, (const uint8_t *)path.c_str(), path.length(),
                                   tag, 16, cipher.data(), plain.data());
   mbedtls_gcm_free(&ctx);
-  if (rc)
-    return false;
+  if (rc) {
+    log_e("Cache cryptographic operation failed: rc=%d", rc);
+    return cacheFailure(path, "encryption/authentication");
+  }
   data = String((const char *)plain.data(), n);
   return true;
 }
@@ -246,6 +257,7 @@ bool saveState() {
   String serialized;
   serializeMsgPack(d, serialized);
   if (serialized.length() > 320 * 1024) {
+    log_e("Cache snapshot exceeds 320 KiB limit");
     storageOK = false;
     return false;
   }
@@ -258,8 +270,8 @@ bool saveState() {
   String check;
   if (!sealRead(path, check) || check.length() != serialized.length() ||
       memcmp(check.c_str(), serialized.c_str(), serialized.length()) != 0)
-    return false;
-  if (prefs.putUInt("generation", generation) != 4)
+    return cacheFailure(path, "snapshot readback verification");
+  if (!checkNvsWrite("generation", prefs.putUInt("generation", generation), 4))
     return false;
   storageOK = true;
   return true;
@@ -276,8 +288,11 @@ void loadState() {
   }
   JsonDocument d;
   if (deserializeMsgPack(d, raw) || d["schema"] != 1 || d["cards"].size() > 300 ||
-      d["grants"].size() > 150)
+      d["grants"].size() > 150) {
+    log_e("Cache snapshot schema, encoding or capacity validation failed");
+    storageOK = false;
     return;
+  }
   configuration.set(d["config"]);
   for (JsonObject o : d["cards"].as<JsonArray>()) {
     Card c;
@@ -305,10 +320,15 @@ void loadState() {
 // Runs before worker tasks: only uncommitted temporary files can be removed.
 void recoverStorage() {
   Lock f(fsMutex);
-  LittleFS.remove("/state0.tmp");
-  LittleFS.remove("/state1.tmp");
+  for (const char *path : {"/state0.tmp", "/state1.tmp"})
+    if (LittleFS.exists(path) && !LittleFS.remove(path))
+      cacheFailure(path, "temporary file removal");
   std::vector<String> orphaned;
   File dir = LittleFS.open("/events");
+  if (!dir) {
+    cacheFailure("/events", "directory open");
+    return;
+  }
   File file = dir.openNextFile();
   while (file) {
     String path = file.path();
@@ -320,6 +340,8 @@ void recoverStorage() {
   for (auto &path : orphaned)
     if (LittleFS.remove(path))
       dropped++;
+    else
+      cacheFailure(path, "orphan removal");
   if (!orphaned.empty())
-    prefs.putUInt("dropped", dropped);
+    checkNvsWrite("dropped", prefs.putUInt("dropped", dropped), 4);
 }
