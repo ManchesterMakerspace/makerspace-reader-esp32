@@ -3,6 +3,29 @@ $readerRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Push-Location $readerRoot
 try {
  New-Item -ItemType Directory -Force .test-build | Out-Null
+ & g++ -std=c++11 -Wall -Wextra -Werror tests/audio.cpp MakerspaceReader/Audio.cpp -o .test-build/audio-tests.exe
+ if($LASTEXITCODE -ne 0){throw 'Audio test compilation failed'}
+ & ./.test-build/audio-tests.exe
+ if($LASTEXITCODE -ne 0){throw 'Audio tests failed'}
+ Copy-Item MakerspaceReader/AudioQwiic.cpp .test-build/AudioQwiic.cpp -Force
+ & g++ -std=c++11 -Wall -Wextra -Werror -I tests/audio-fakes -I MakerspaceReader tests/audio-backend.cpp .test-build/AudioQwiic.cpp -o .test-build/audio-backend-tests.exe
+ if($LASTEXITCODE -ne 0){throw 'Audio backend test compilation failed'}
+ & ./.test-build/audio-backend-tests.exe
+ if($LASTEXITCODE -ne 0){throw 'Audio backend tests failed'}
+ Copy-Item MakerspaceReader/AudioService.cpp .test-build/AudioService.cpp -Force
+ & g++ -std=c++11 -Wall -Wextra -Werror -I tests/audio-fakes -I MakerspaceReader tests/audio-service.cpp .test-build/AudioService.cpp MakerspaceReader/Audio.cpp -o .test-build/audio-service-tests.exe
+ if($LASTEXITCODE -ne 0){throw 'Audio service test compilation failed'}
+ & ./.test-build/audio-service-tests.exe
+ if($LASTEXITCODE -ne 0){throw 'Audio service tests failed'}
+ & g++ -std=c++11 -Wall -Wextra -Werror tests/display.cpp MakerspaceReader/Display.cpp -o .test-build/display-tests.exe
+ if($LASTEXITCODE -ne 0){throw 'Display test compilation failed'}
+ & ./.test-build/display-tests.exe
+ if($LASTEXITCODE -ne 0){throw 'Display tests failed'}
+ Copy-Item MakerspaceReader/DisplaySerLcd.cpp .test-build/DisplaySerLcd.cpp -Force
+ & g++ -std=c++11 -Wall -Wextra -Werror -I tests/display-fakes -I MakerspaceReader tests/display-backend.cpp .test-build/DisplaySerLcd.cpp MakerspaceReader/Display.cpp -o .test-build/display-backend-tests.exe
+ if($LASTEXITCODE -ne 0){throw 'Display backend test compilation failed'}
+ & ./.test-build/display-backend-tests.exe
+ if($LASTEXITCODE -ne 0){throw 'Display backend tests failed'}
  # Compile the production relay implementation with hardware/state test doubles.
  Copy-Item MakerspaceReader/Relay.cpp .test-build/Relay.cpp -Force
  & g++ -std=c++11 -Wall -Wextra -Werror -I tests/relay-fakes tests/relay.cpp .test-build/Relay.cpp -o .test-build/relay-tests.exe

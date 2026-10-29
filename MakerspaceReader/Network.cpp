@@ -123,6 +123,7 @@ static void refresh() {
     checkNvsWrite("blocked", prefs.putBool("blocked", false), 1);
   }
   if (result["cards"].size() > 300 || result["grants"].size() > 150) {
+    apiOK = false;
     log_e("MongoDB API snapshot exceeds cache capacity");
     return;
   }
@@ -168,17 +169,14 @@ static void refresh() {
         c.pending = previous->second.pending;
         c.observedUs = previous->second.observedUs;
         auto &p = previous->second;
-        changed |= p.id != c.id || p.holder != c.holder || p.status != c.status ||
-                   p.expiry != c.expiry || p.key != c.key || p.digest != c.digest ||
-                   p.member != c.member;
+        changed |= p.id != c.id || p.holder != c.holder || p.status != c.status || p.expiry != c.expiry || p.key != c.key || p.digest != c.digest || p.member != c.member;
       } else
         changed = true;
       next[c.uid.c_str()] = c;
     }
     // Keep only station observation tombstones when cards disappear.
     for (auto &pair : cards)
-      if (!next.count(pair.first) && next.size() < 300 &&
-          (pair.second.first || pair.second.pending)) {
+      if (!next.count(pair.first) && next.size() < 300 && (pair.second.first || pair.second.pending)) {
         Card c;
         if (pair.second.sourceSequence > sequence)
           c = pair.second;
@@ -203,9 +201,7 @@ static void refresh() {
     }
     changed |= ng.size() != grants.size();
     grants.swap(ng);
-    if (relayOn && toolDeadline > 0 &&
-        (oldTool != String(configuration["toolId"] | "") ||
-         oldRole != String(configuration["role"] | "")))
+    if (relayOn && toolDeadline > 0 && (oldTool != String(configuration["toolId"] | "") || oldRole != String(configuration["role"] | "")))
       stopRelay();
     recheckActiveTool();
   }
@@ -249,8 +245,7 @@ static void reserveEventSpace(size_t incoming) {
   }
   for (auto &p : files) {
     Lock f(fsMutex);
-    if (total + incoming <= 3 * 1024 * 1024 &&
-        LittleFS.usedBytes() + incoming + 640 * 1024 < LittleFS.totalBytes())
+    if (total + incoming <= 3 * 1024 * 1024 && LittleFS.usedBytes() + incoming + 640 * 1024 < LittleFS.totalBytes())
       break;
     File file = LittleFS.open(p);
     if (!file) {
@@ -483,6 +478,7 @@ static void spool() {
         serializeJson(e, raw);
         sealWrite(path, raw);
       } else {
+        apiOK = false;
         log_e("MongoDB API did not acknowledge event; retained for retry");
       }
     }
@@ -533,8 +529,7 @@ void networkTask(void *) {
         if (rc != ESP_OK)
           log_e("MQTT client start failed: %s", esp_err_to_name(rc));
       }
-      if (!maintenance && (lastRefresh == 0 || millis() - lastRefresh >= 300000 ||
-                           (refreshNeeded && millis() - lastRefresh >= 5000))) {
+      if (!maintenance && (lastRefresh == 0 || millis() - lastRefresh >= 300000 || (refreshNeeded && millis() - lastRefresh >= 5000))) {
         refreshNeeded = false;
         refresh();
       }

@@ -1,4 +1,6 @@
 #include "Reader.h"
+#include "Display.h"
+#include "Audio.h"
 #include "Policy.h"
 #include "secrets.h"
 #include <ETH.h>
@@ -58,7 +60,7 @@ JsonDocument configuration;
 uint32_t configurationSequence = 0;
 std::atomic<bool> maintenance(false), relayOn(false), clockTrusted(false), refreshNeeded(true),
     storageOK(false), apiOK(false), mqttOK(false), nfcOK(false), deviceBlocked(false);
-std::atomic<int64_t> relayDeadline(0), toolDeadline(0);
+std::atomic<int64_t> relayDeadline(0), toolDeadline(0), relayStartedUs(0);
 std::atomic<uint32_t> accepted(0), rejected(0), dropped(0);
 String activeUid, lastError, csrf;
 Preferences prefs;
@@ -172,6 +174,8 @@ void readerSetup() {
     maintenance = true;
 #endif
   webSetup();
+  display::setup();
+  audio::setup();
   if (xTaskCreate(relayTask, "relay", 3072, nullptr, 4, nullptr) != pdPASS) {
     maintenance = true;
     log_e("Failed to create relay task; admission disabled");

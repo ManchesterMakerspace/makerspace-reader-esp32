@@ -16,7 +16,7 @@ struct Lock {
 struct Card { bool valid = true, credential = true; int64_t expiry = 100000; };
 extern std::unordered_map<std::string, Card> cards;
 extern std::atomic<bool> relayOn, maintenance, deviceBlocked, clockTrusted;
-extern std::atomic<int64_t> relayDeadline, toolDeadline;
+extern std::atomic<int64_t> relayDeadline, toolDeadline, relayStartedUs;
 extern String activeUid;
 int64_t epochMs();
 bool authorize(const Card &, String &, int64_t &);

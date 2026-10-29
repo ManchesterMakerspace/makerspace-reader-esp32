@@ -20,6 +20,7 @@ void stopRelay() {
   relayOn = false;
   relayDeadline = 0;
   toolDeadline = 0;
+  relayStartedUs = 0;
   activeUid = "";
 }
 void startRelay(int64_t durationMs, int64_t until, const String &uid) {
@@ -27,7 +28,8 @@ void startRelay(int64_t durationMs, int64_t until, const String &uid) {
     stopRelay();
     return;
   }
-  relayDeadline = esp_timer_get_time() + durationMs * 1000;
+  relayStartedUs = esp_timer_get_time();
+  relayDeadline = relayStartedUs.load() + durationMs * 1000;
   toolDeadline = until;
   activeUid = uid;
   armRelayTimer(); // once_ms() replaces any previous countdown.

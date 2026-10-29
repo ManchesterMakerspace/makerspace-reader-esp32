@@ -5,7 +5,7 @@ bool stateHeld = false;
 int stateMutex = 0, gpio = LOW;
 int64_t monotonicUs = 1000000, epochOffset = 0, grantUntil = 100000;
 std::atomic<bool> relayOn(false), maintenance(false), deviceBlocked(false), clockTrusted(true);
-std::atomic<int64_t> relayDeadline(0), toolDeadline(0);
+std::atomic<int64_t> relayDeadline(0), toolDeadline(0), relayStartedUs(0);
 String activeUid;
 std::unordered_map<std::string, Card> cards;
 uint64_t timerMs = 0;
@@ -23,7 +23,7 @@ static void start(int64_t duration, int64_t until = 0) {
 }
 static void recheck() { Lock s(stateMutex); recheckActiveTool(); }
 static void off() {
-  assert(!relayOn && gpio == LOW && !timerArmed);
+  assert(!relayOn && gpio == LOW && !timerArmed && relayStartedUs == 0);
   assert(relayDeadline == 0 && toolDeadline == 0 && activeUid.empty());
 }
 int main() {
@@ -52,7 +52,9 @@ int main() {
   cards["A"].credential = false; recheck(); off();
   cards["A"].credential = true;
   start(100000, grantUntil);
+  int64_t started = relayStartedUs;
   cards["A"].expiry = epochMs() + 5000; recheck();
+  assert(relayStartedUs == started);
   assert(timerMs == 5000 && toolDeadline == cards["A"].expiry);
   monotonicUs += 5000000; timerCallback(); serviceRelay(); off();
   cards["A"].expiry = epochMs() + 100000;
