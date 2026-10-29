@@ -38,17 +38,16 @@ inline bool parse(const char *hex, uint8_t *out) {
 }
 // Store has the Preferences byte-blob interface. Only boot calls this function,
 // before any nonce, event, config or cache writes and before worker tasks start.
-template <typename Store, typename Random>
+template<typename Store, typename Random>
 Result loadOrCreate(Store &store, const char *configured, bool namespaceEmpty, bool filesystemEmpty,
                     Random random, uint8_t *out) {
   std::memset(out, 0, bytes);
   uint8_t candidate[bytes] = {}, saved[bytes] = {};
   Result result = Result::missingUsed;
   if (configured && !parse(configured, candidate)) {
-    result = Result::invalidConfigured; // Explicitly invalid is never an auto-generation request.
+    result = Result::invalidConfigured;  // Explicitly invalid is never an auto-generation request.
   } else if (store.isKey("cacheKey")) {
-    if (store.getBytesLength("cacheKey") != bytes ||
-        store.getBytes("cacheKey", saved, bytes) != bytes)
+    if (store.getBytesLength("cacheKey") != bytes || store.getBytes("cacheKey", saved, bytes) != bytes)
       result = Result::invalidStored;
     else if (configured && std::memcmp(candidate, saved, bytes) != 0)
       result = Result::mismatch;
@@ -58,14 +57,11 @@ Result loadOrCreate(Store &store, const char *configured, bool namespaceEmpty, b
     }
   } else if (configured) {
     std::memcpy(out, candidate, bytes);
-    result = Result::compiled; // Preserve existing devices without persisting their compiled key.
+    result = Result::compiled;  // Preserve existing devices without persisting their compiled key.
   } else if (namespaceEmpty && filesystemEmpty) {
     random(candidate, bytes);
-    if (store.putBytes("cacheKey", candidate, bytes) == bytes &&
-        store.getBytesLength("cacheKey") == bytes &&
-        store.getBytes("cacheKey", saved, bytes) == bytes &&
-        std::memcmp(candidate, saved, bytes) == 0) {
-      std::memcpy(out, saved, bytes); // Never use a key until durable write/readback succeeds.
+    if (store.putBytes("cacheKey", candidate, bytes) == bytes && store.getBytesLength("cacheKey") == bytes && store.getBytes("cacheKey", saved, bytes) == bytes && std::memcmp(candidate, saved, bytes) == 0) {
+      std::memcpy(out, saved, bytes);  // Never use a key until durable write/readback succeeds.
       result = Result::created;
     } else
       result = Result::persistenceFailed;
@@ -74,4 +70,4 @@ Result loadOrCreate(Store &store, const char *configured, bool namespaceEmpty, b
   std::memset(saved, 0, bytes);
   return result;
 }
-} // namespace cacheKey
+}  // namespace cacheKey

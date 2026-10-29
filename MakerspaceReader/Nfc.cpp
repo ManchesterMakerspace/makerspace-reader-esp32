@@ -4,7 +4,7 @@
 #include "Reader.h"
 #include <MakerspacePN7160.h>
 #include "Display.h"
-#include <SparkFun_Qwiic_Buzzer_Arduino_Library.h>
+#include "Audio.h"
 #include <Wire.h>
 #include <esp_timer.h>
 #include <mbedtls/sha256.h>
@@ -54,8 +54,6 @@ static bool reactivate() {
   return nfc.remoteDevice.getNFCIDLen() == selectedUidLength &&
          memcmp(nfc.remoteDevice.getNFCID(), selectedUid, selectedUidLength) == 0;
 }
-static QwiicBuzzer buzzer;
-static bool haveBuzzer = false;
 // Fresh, bounded NCI exchange. Never inspect a buffer after timeout/short receive.
 static bool command(const uint8_t *data, uint8_t length, uint8_t *answer, uint8_t &size) {
   size = 0;
@@ -218,13 +216,6 @@ static bool enroll(Card &card) {
   refreshNeeded = true;
   return true;
 }
-static void feedback(bool success) {
-  Lock i(i2cMutex);
-  if (haveBuzzer) {
-    buzzer.configureBuzzer(success ? 2700 : 1500, success ? 100 : 350, 2);
-    buzzer.on();
-  }
-}
 static void scan(const String &uid, bool classic) {
   const uint64_t presentation = display::beginPresentation();
   display::Scan displayScan;
@@ -365,7 +356,7 @@ static void scan(const String &uid, bool classic) {
   displayScan.reason = display::reasonFrom(reason.c_str());
   display::scanResult(presentation, displayScan);
   enqueueEvent(card, allow, reason);
-  feedback(allow);
+  audio::play(allow ? audio::MelodyId::Coin : audio::MelodyId::MarioDied);
 }
 static bool probe(uint8_t address) {
   for (int attempt = 0; attempt < 3; ++attempt) {
@@ -412,15 +403,18 @@ static bool initializeNfc() {
   else
     log_e("NFC reader initialization failed: %s; retrying", nfcControllerName());
   // A present but failing PN7160 is retried, never silently bypassed by PN532.
+  static bool startupSoundRequested = false;
+  if (ok && !startupSoundRequested) {
+    startupSoundRequested = true;
+    audio::play(audio::MelodyId::PowerUp);
+  }
   return ok;
 }
 void nfcTask(void *) {
   nfcTaskHandle = xTaskGetCurrentTaskHandle();
   {
     Lock i(i2cMutex);
-    haveBuzzer = buzzer.begin();
-    if (haveBuzzer)
-      log_i("I2C device found: Qwiic buzzer at 0x34");
+
     nfcOK = initializeNfc();
   }
   String previous;

@@ -1,5 +1,6 @@
 #include "Reader.h"
 #include "Display.h"
+#include "Audio.h"
 #include "Policy.h"
 #include "secrets.h"
 #include <ETH.h>
@@ -174,6 +175,7 @@ void readerSetup() {
 #endif
   webSetup();
   display::setup();
+  audio::setup();
   if (xTaskCreate(relayTask, "relay", 3072, nullptr, 4, nullptr) != pdPASS) {
     maintenance = true;
     log_e("Failed to create relay task; admission disabled");

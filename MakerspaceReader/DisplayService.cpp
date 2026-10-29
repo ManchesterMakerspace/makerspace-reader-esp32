@@ -72,4 +72,4 @@ void setup() {
   if (xTaskCreate(task, "display", 4096, nullptr, tskIDLE_PRIORITY, nullptr) != pdPASS)
     log_e("Optional display task unavailable; reader continues without LCD");
 }
-} // namespace display
+}  // namespace display

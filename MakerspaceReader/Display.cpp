@@ -5,8 +5,12 @@
 #include <ctime>
 
 namespace display {
-static bool space(unsigned char c) { return c == ' ' || (c >= 9 && c <= 13); }
-static bool safe(unsigned char c) { return c >= 32 && c <= 126 && c != '|'; }
+static bool space(unsigned char c) {
+  return c == ' ' || (c >= 9 && c <= 13);
+}
+static bool safe(unsigned char c) {
+  return c >= 32 && c <= 126 && c != '|';
+}
 void firstName(const char *holder, char (&out)[17]) {
   std::memset(out, 0, sizeof(out));
   if (!holder) return;
@@ -29,7 +33,8 @@ int warningDays(int64_t expiry, int64_t now, int hours) {
   if (expiry <= 0 || expiry <= now) return 0;
   int64_t remaining = expiry - now;
   return remaining <= int64_t(hours) * 3600000
-             ? int((remaining + 86399999) / 86400000) : 0;
+           ? int((remaining + 86399999) / 86400000)
+           : 0;
 }
 // Gregorian days since 1970-01-01, used only for New York's post-2007 DST rule.
 // No setenv/TZ/localtime calls: authorization and RTC remain in UTC.
@@ -68,11 +73,12 @@ static void pad(char *out, unsigned width, const char *text) {
   out[width] = 0;
 }
 void Presenter::render(Backend &backend, const Frame &frame) {
-  if (havePrevious && previous.color == frame.color &&
-      !std::strcmp(previous.row1, frame.row1) && !std::strcmp(previous.row2, frame.row2))
+  if (havePrevious && previous.color == frame.color && !std::strcmp(previous.row1, frame.row1) && !std::strcmp(previous.row2, frame.row2))
     return;
-  if (backend.draw(frame)) { previous = frame; havePrevious = true; }
-  else havePrevious = false; // A partial frame may have changed the physical display.
+  if (backend.draw(frame)) {
+    previous = frame;
+    havePrevious = true;
+  } else havePrevious = false;  // A partial frame may have changed the physical display.
 }
 void Model::append(const char *left, const char *bottom, uint32_t color, int duration) {
   if (count == 4) return;
@@ -96,8 +102,7 @@ void Model::accept(const Presentation &p, int64_t now) {
     ++index;
     if (index < count) deadline += messages[index].duration;
   }
-  if (p.enrollment != enrollment &&
-      (enrollment == Enrollment::none || enrollment == Enrollment::running)) {
+  if (p.enrollment != enrollment && (enrollment == Enrollment::none || enrollment == Enrollment::running)) {
     enrollment = p.enrollment;
     count = index = 0;
     if (enrollment == Enrollment::succeeded)
@@ -108,7 +113,7 @@ void Model::accept(const Presentation &p, int64_t now) {
   }
   if (!p.finished || scanQueued) return;
   scanQueued = true;
-  if (enrollment == Enrollment::failed) return; // Do not replace failure with generic denial.
+  if (enrollment == Enrollment::failed) return;  // Do not replace failure with generic denial.
   unsigned before = count;
   const auto &s = p.scan;
   if (s.allowed) {
@@ -143,16 +148,25 @@ Frame Model::frame(const Status &s, int64_t now) {
   Frame f;
   const char *left = "", *bottom = "Hold fob to read";
   if (enrollment == Enrollment::running) {
-    left = "Enrolling"; bottom = "Keep holding"; f.color = amber;
+    left = "Enrolling";
+    bottom = "Keep holding";
+    f.color = amber;
   } else if (index < count) {
-    left = messages[index].left; bottom = messages[index].bottom; f.color = messages[index].color;
+    left = messages[index].left;
+    bottom = messages[index].bottom;
+    f.color = messages[index].color;
   } else if (now < startingUntil) {
-    left = "Starting"; bottom = "Reader"; f.color = blue;
+    left = "Starting";
+    bottom = "Reader";
+    f.color = blue;
   } else if (!s.net || !s.api || !s.mqtt || !s.trusted) {
-    bottom = !s.net ? "Error: NET" : !s.api ? "Error: DB" : !s.mqtt ? "Error: MQ" : "Error: NTP";
+    bottom = !s.net ? "Error: NET" : !s.api  ? "Error: DB"
+                                   : !s.mqtt ? "Error: MQ"
+                                             : "Error: NTP";
     f.color = pink;
   } else if (s.relay && !s.tool && s.relayDeadlineMs > now) {
-    left = "Access on"; f.color = green;
+    left = "Access on";
+    f.color = green;
   }
   pad(f.row1, 16, "");
   // Copy only eleven characters; do not leave a NUL in the reserved clock field.
@@ -163,7 +177,7 @@ Frame Model::frame(const Status &s, int64_t now) {
   char clock[6] = "     ";
   if (s.relay && s.tool) {
     int64_t minutes = std::max<int64_t>(0, now - s.relayStartedMs) / 60000;
-    minutes = std::min<int64_t>(minutes, 5999); // Saturate at 99:59, never wrap.
+    minutes = std::min<int64_t>(minutes, 5999);  // Saturate at 99:59, never wrap.
     std::snprintf(clock, sizeof(clock), "%02d:%02d", int(minutes / 60), int(minutes % 60));
   } else if (s.relay && s.relayDeadlineMs > now) {
     int seconds = int(std::min<int64_t>(9999, (s.relayDeadlineMs - now + 999) / 1000));
@@ -172,4 +186,4 @@ Frame Model::frame(const Status &s, int64_t now) {
   std::memcpy(f.row1 + 11, clock, 5);
   return f;
 }
-} // namespace display
+}  // namespace display

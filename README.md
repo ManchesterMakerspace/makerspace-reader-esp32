@@ -74,6 +74,8 @@ Ethernet outage messages are emitted once per failure episode, with recovery log
 
 Optional LCD screens, clocks, expiry warnings, backend replacement and bench checks are documented in [Display service](docs/DISPLAY.md).
 
+Asynchronous Qwiic buzzer melodies, scheduling, API and bench checks are documented in [Audio service](docs/AUDIO.md).
+
 ## Management
 
 All routes require the compiled-in username/password, including errors, OTA metadata and upload chunks. Serve the reader's HTTP port only on an isolated management network behind HTTPS; HTTP Basic credentials are not encrypted on the reader-to-proxy segment.

@@ -8,9 +8,11 @@ namespace display {
 class SerLcdBackend : public Backend {
   SerLCD lcd;
   Frame applied;
-  bool colorKnown = false, rowKnown[2] = {false, false};
+  bool colorKnown = false, rowKnown[2] = { false, false };
 public:
-  void begin() { lcd.begin(Wire, 0x72); } // One startup clear in the library only.
+  void begin() {
+    lcd.begin(Wire, 0x72);
+  }  // One startup clear in the library only.
   bool draw(const Frame &f) override {
     if (xSemaphoreTake(i2cMutex, 0) != pdTRUE) return false;
     // At most one color or row per pass, then release the bus for NFC.
@@ -47,4 +49,4 @@ Backend *detectBackend() {
   xSemaphoreGive(i2cMutex);
   return found ? static_cast<Backend *>(&present) : &absent;
 }
-} // namespace display
+}  // namespace display
