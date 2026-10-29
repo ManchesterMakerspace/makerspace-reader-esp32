@@ -64,7 +64,13 @@ The PN7160 configuration assumes the module's normal VDD(UP)=3.3 V / VANT=5 V su
 | latch | HIGH for 5 seconds |
 | tool | Toggle on each authorized presentation; OFF on expiry or verified invalidation |
 
-Remove a card for at least 500 ms before the same card triggers another action. Relay timing runs in a separate high-priority task so network timeouts do not extend pulses. Tool relays start OFF after every boot. A physical emergency stop and machine safety circuits remain independent of this access controller.
+Remove a card for at least 500 ms before the same card triggers another action. Each relay activation arms ESP32 Arduino's bundled Ticker with a fresh one-shot countdown. The callback posts an off event; a separate high-priority task checks the current deadline and switches the relay under the same state lock used by scans. Resetting a pulse replaces its countdown, and a delayed old callback cannot stop the new pulse. Deadline polling remains a fallback, so network timeouts do not extend pulses. Tool relays start OFF after every boot. A physical emergency stop and machine safety circuits remain independent of this access controller.
+
+## Serial diagnostics
+
+Open the serial console at **115200 baud**. The build script selects **Core Debug Level: Info**; select that level (or higher) in Arduino IDE too. log_i() reports discovered RTC, display, buzzer and NFC devices, successful NFC initialization, and network recovery. log_e() reports NFC initialization/runtime failures, Ethernet initialization/link loss and 30-second link/IP startup timeouts, API failures, MQTT connection/publish/PUBACK failures, and NVS/cache/spool errors.
+
+Ethernet outage messages are emitted once per failure episode, with recovery logged separately. NFC retries log every three seconds. API/MQTT retries retain their existing backoff. Diagnostics contain operation names, local file paths and error codes, never credentials, keys, card contents or API response bodies.
 
 ## Management
 

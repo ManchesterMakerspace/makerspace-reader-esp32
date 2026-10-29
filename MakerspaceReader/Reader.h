@@ -59,3 +59,19 @@ void readerLoop();
 bool authorize(const Card &, String &reason, int64_t &until);
 String hexBytes(const uint8_t *, size_t);
 bool decodeHex(const String &, uint8_t *, size_t);
+
+// Relay transitions and authorization rechecks require stateMutex held.
+// serviceRelay acquires it itself; the Ticker callback only posts an atomic event.
+void stopRelay();
+void startRelay(int64_t durationMs, int64_t until, const String &uid);
+void recheckActiveTool();
+void serviceRelay();
+// Check Preferences writes without ever logging stored values.
+inline bool checkNvsWrite(const char *key, size_t written, size_t expected) {
+  if (written == expected)
+    return true;
+  log_e("NVS write failed: reader/%s (%u/%u bytes)", key,
+        unsigned(written), unsigned(expected));
+  storageOK = false;
+  return false;
+}

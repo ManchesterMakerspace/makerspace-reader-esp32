@@ -20,8 +20,13 @@ static std::unordered_map<int, uint32_t> inFlightAt;
 static std::atomic<bool> mqttStarted(false);
 bool api(const String &path, JsonDocument &response, const String &body) {
   Lock l(apiMutex);
-  if (!String(API_URL).startsWith("https://") || !ETH.hasIP() || epochMs() < 1700000000000LL)
+  if (!String(API_URL).startsWith("https://") || !ETH.hasIP() || epochMs() < 1700000000000LL) {
+    log_e("MongoDB API %s unavailable: HTTPS=%d, Ethernet IP=%d, TLS clock ready=%d",
+          path.c_str(), String(API_URL).startsWith("https://"), ETH.hasIP(),
+          epochMs() >= 1700000000000LL);
+    apiOK = false;
     return false;
+  }
   NetworkClientSecure tls;
   tls.setCACert(SERVER_CA);
   tls.setCertificate(CLIENT_CERT);
@@ -29,8 +34,11 @@ bool api(const String &path, JsonDocument &response, const String &body) {
   HTTPClient http;
   http.setConnectTimeout(2000);
   http.setTimeout(3000);
-  if (!http.begin(tls, String(API_URL) + path))
+  if (!http.begin(tls, String(API_URL) + path)) {
+    log_e("MongoDB API HTTPS initialization failed: %s", path.c_str());
+    apiOK = false;
     return false;
+  }
   http.addHeader("Content-Type", "application/json");
   int code = body.length() ? http.POST(body) : http.GET();
   bool ok = false;
@@ -43,9 +51,10 @@ bool api(const String &path, JsonDocument &response, const String &body) {
     String id = path == "/reader/v1/snapshot" ? String(response["config"]["id"] | "")
                                               : String(response["id"] | "");
     if (id != DEVICE_ID) {
+      log_e("MongoDB API returned a different reader identity: %s", path.c_str());
       ok = false;
       deviceBlocked = true;
-      prefs.putBool("blocked", true);
+      checkNvsWrite("blocked", prefs.putBool("blocked", true), 1);
     }
   }
   static uint32_t responseSequence = 0;
@@ -57,12 +66,13 @@ bool api(const String &path, JsonDocument &response, const String &body) {
     // A rejected event is retained; rejected reader authorization disables cached access.
     if (path == "/reader/v1/snapshot" || path == "/reader/v1/cards/lookup") {
       deviceBlocked = true;
-      prefs.putBool("blocked", true);
-      digitalWrite(RELAY_PIN, LOW);
-      relayOn = false;
+      checkNvsWrite("blocked", prefs.putBool("blocked", true), 1);
+      Lock s(stateMutex);
+      stopRelay();
     }
   }
   if (!ok) {
+    log_e("MongoDB API %s failed: HTTP/transport code=%d (200 means invalid response)", path.c_str(), code);
     Lock s(stateMutex);
     lastError = "API " + String(code) + " " + path;
   }
@@ -72,6 +82,7 @@ static void confirmTime(int64_t t) {
   if (t < 1700000000000LL)
     return;
   if (clockTrusted && t + 5000 < epochMs()) {
+    log_e("API time moved backwards; authorization clock no longer trusted");
     clockTrusted = false;
     return;
   }
@@ -93,7 +104,7 @@ static void confirmTime(int64_t t) {
   if (resolved)
     saveState();
   if (t > int64_t(prefs.getULong64("lastTime", 0)) + 3600000) {
-    prefs.putULong64("lastTime", t);
+    checkNvsWrite("lastTime", prefs.putULong64("lastTime", t), 8);
     if (rtcPresent) {
       Lock i(i2cMutex);
       rtc.adjust(DateTime(uint32_t(t / 1000)));
@@ -109,10 +120,12 @@ static void refresh() {
   }
   if (deviceBlocked) {
     deviceBlocked = false;
-    prefs.putBool("blocked", false);
+    checkNvsWrite("blocked", prefs.putBool("blocked", false), 1);
   }
-  if (result["cards"].size() > 300 || result["grants"].size() > 150)
+  if (result["cards"].size() > 300 || result["grants"].size() > 150) {
+    log_e("MongoDB API snapshot exceeds cache capacity");
     return;
+  }
   confirmTime(result["serverTime"] | int64_t(0));
   bool changed = false;
   String old, newState;
@@ -190,19 +203,11 @@ static void refresh() {
     }
     changed |= ng.size() != grants.size();
     grants.swap(ng);
-    if (relayOn && toolDeadline > 0) {
-      auto c = cards.find(activeUid.c_str());
-      String reason;
-      int64_t until = 0;
-      if (oldTool != String(configuration["toolId"] | "") ||
-          oldRole != String(configuration["role"] | "") || c == cards.end() ||
-          !authorize(c->second, reason, until)) {
-        digitalWrite(RELAY_PIN, LOW);
-        relayOn = false;
-        toolDeadline = 0;
-      } else
-        toolDeadline = until;
-    }
+    if (relayOn && toolDeadline > 0 &&
+        (oldTool != String(configuration["toolId"] | "") ||
+         oldRole != String(configuration["role"] | "")))
+      stopRelay();
+    recheckActiveTool();
   }
   if (changed)
     saveState();
@@ -212,8 +217,10 @@ static std::vector<String> eventFiles() {
   std::vector<String> files;
   Lock f(fsMutex);
   File dir = LittleFS.open("/events");
-  if (!dir)
+  if (!dir) {
+    log_e("Cannot open event spool directory");
     return files;
+  }
   File file = dir.openNextFile();
   while (file) {
     String p = file.path();
@@ -233,6 +240,10 @@ static void reserveEventSpace(size_t incoming) {
     Lock f(fsMutex);
     for (auto &p : files) {
       File file = LittleFS.open(p);
+      if (!file) {
+        log_e("Cannot read spool file size: %s", p.c_str());
+        continue;
+      }
       total += ((file.size() + 4095) / 4096) * 4096;
     }
   }
@@ -242,12 +253,19 @@ static void reserveEventSpace(size_t incoming) {
         LittleFS.usedBytes() + incoming + 640 * 1024 < LittleFS.totalBytes())
       break;
     File file = LittleFS.open(p);
+    if (!file) {
+      log_e("Cannot open spool file for eviction: %s", p.c_str());
+      continue;
+    }
     size_t size = ((file.size() + 4095) / 4096) * 4096;
     file.close();
     if (LittleFS.remove(p)) {
       total -= size;
       dropped++;
-      prefs.putUInt("dropped", dropped);
+      checkNvsWrite("dropped", prefs.putUInt("dropped", dropped), 4);
+      log_e("Event spool capacity exhausted; oldest audit event discarded");
+    } else {
+      log_e("Cannot remove spool file to reclaim space: %s", p.c_str());
     }
   }
 }
@@ -258,7 +276,8 @@ void enqueueEvent(const Card &card, bool allow, const String &reason) {
   {
     Lock f(fsMutex);
     seq = prefs.getULong64("eventSeq", 0) + 1;
-    if (!seq || prefs.putULong64("eventSeq", seq) != 8) {
+    if (!seq || !checkNvsWrite("eventSeq", prefs.putULong64("eventSeq", seq), 8)) {
+      log_e("Cannot reserve NVS event sequence; audit event dropped");
       dropped++;
       storageOK = false;
       return;
@@ -295,7 +314,7 @@ void enqueueEvent(const Card &card, bool allow, const String &reason) {
   snprintf(prefix, sizeof(prefix), "%020llu-", static_cast<unsigned long long>(seq));
   if (!sealWrite("/events/" + String(prefix) + id, payload)) {
     dropped++;
-    prefs.putUInt("dropped", dropped);
+    checkNvsWrite("dropped", prefs.putUInt("dropped", dropped), 4);
     storageOK = false;
   }
 }
@@ -303,18 +322,33 @@ static void mqttEvent(void *, esp_event_base_t, int32_t id, void *data) {
   auto *e = (esp_mqtt_event_handle_t)data;
   if (id == MQTT_EVENT_CONNECTED) {
     mqttOK = true;
-    esp_mqtt_client_subscribe(mqtt, "cards/#", 1);
-    esp_mqtt_client_subscribe(mqtt, "readers/all/invalidate", 1);
+    log_i("MQTT connected");
+    if (esp_mqtt_client_subscribe(mqtt, "cards/#", 1) < 0)
+      log_e("MQTT subscribe failed: cards/#");
+    if (esp_mqtt_client_subscribe(mqtt, "readers/all/invalidate", 1) < 0)
+      log_e("MQTT subscribe failed: readers/all/invalidate");
     refreshNeeded = true;
   }
   if (id == MQTT_EVENT_DISCONNECTED) {
     mqttOK = false;
+    log_e("MQTT disconnected; unacknowledged publications will be retried");
     int reset = -1;
-    xQueueSend(mqttAcks, &reset, 0);
+    if (xQueueSend(mqttAcks, &reset, 0) != pdTRUE)
+      log_e("MQTT acknowledgment queue full during disconnect");
   }
   if (id == MQTT_EVENT_PUBLISHED) {
     int msg = e->msg_id;
-    xQueueSend(mqttAcks, &msg, 0);
+    if (xQueueSend(mqttAcks, &msg, 0) != pdTRUE)
+      log_e("MQTT acknowledgment queue full; message %d will be retried", msg);
+  }
+  if (id == MQTT_EVENT_ERROR) {
+    if (e->error_handle)
+      log_e("MQTT error: type=%d, TLS=%d, TLS stack=%d, socket errno=%d, broker code=%d",
+            int(e->error_handle->error_type), int(e->error_handle->esp_tls_last_esp_err),
+            e->error_handle->esp_tls_stack_err, e->error_handle->esp_transport_sock_errno,
+            int(e->error_handle->connect_return_code));
+    else
+      log_e("MQTT error without transport details");
   }
   if (id == MQTT_EVENT_DATA) {
     if (e->total_data_len > 8192)
@@ -330,6 +364,9 @@ static void mqttEvent(void *, esp_event_base_t, int32_t id, void *data) {
       return;
     if (mqttTopic == "readers/all/invalidate") {
       refreshNeeded = true;
+      Lock s(stateMutex);
+      if (relayOn && toolDeadline > 0)
+        stopRelay();
       return;
     }
     if (mqttTopic != "cards/update" && mqttTopic != "cards/insert" && mqttTopic != "cards/delete")
@@ -338,8 +375,15 @@ static void mqttEvent(void *, esp_event_base_t, int32_t id, void *data) {
     if (start < 0)
       return;
     JsonDocument d;
-    if (!deserializeJson(d, mqttFragment.substring(start)) && d["document"].is<JsonObject>())
+    if (!deserializeJson(d, mqttFragment.substring(start)) && d["document"].is<JsonObject>()) {
       refreshNeeded = true;
+      Lock s(stateMutex);
+      // MQTT is an invalidation hint, never authority to install credentials.
+      // Missing UID (e.g. delete by ID) conservatively invalidates any active tool.
+      String uid = d["document"]["uid"] | "";
+      if (relayOn && toolDeadline > 0 && (uid.isEmpty() || uid == activeUid))
+        stopRelay();
+    }
   }
 }
 static void spool() {
@@ -366,6 +410,7 @@ static void spool() {
   }
   for (auto it = inFlightAt.begin(); it != inFlightAt.end();) {
     if (millis() - it->second > 60000) {
+      log_e("MQTT publish acknowledgment timed out: message %d", it->first);
       inFlight.erase(it->first);
       it = inFlightAt.erase(it);
     } else
@@ -379,10 +424,13 @@ static void spool() {
     String raw;
     JsonDocument e;
     if (!sealRead(path, raw) || deserializeJson(e, raw)) {
+      log_e("Corrupt/unreadable audit spool record: %s", path.c_str());
       Lock f(fsMutex);
       if (LittleFS.remove(path)) {
         dropped++;
-        prefs.putUInt("dropped", dropped);
+        checkNvsWrite("dropped", prefs.putUInt("dropped", dropped), 4);
+      } else {
+        log_e("Cannot remove corrupt spool file: %s", path.c_str());
       }
       continue;
     }
@@ -415,6 +463,9 @@ static void spool() {
           inFlight[id] = path;
           inFlightAt[id] = millis();
           mqttAttempts++;
+        } else {
+          mqttAttempts++;
+          log_e("MQTT publish enqueue failed: activity/checkins (code=%d)", id);
         }
       }
     }
@@ -431,19 +482,28 @@ static void spool() {
         raw = "";
         serializeJson(e, raw);
         sealWrite(path, raw);
+      } else {
+        log_e("MongoDB API did not acknowledge event; retained for retry");
       }
     }
     if (e["dbAck"].as<bool>() && e["mqttAck"].as<bool>()) {
       Lock f(fsMutex);
-      LittleFS.remove(path);
+      if (!LittleFS.remove(path))
+        log_e("Cannot remove acknowledged spool file: %s", path.c_str());
     }
   }
 }
 void networkTask(void *) {
   mqttAcks = xQueueCreate(32, sizeof(int));
+  if (!mqttAcks) {
+    log_e("Cannot allocate MQTT acknowledgment queue; network task stopped");
+    vTaskDelete(nullptr);
+    return;
+  }
   {
     Lock f(fsMutex);
-    LittleFS.mkdir("/events");
+    if (!LittleFS.exists("/events") && !LittleFS.mkdir("/events"))
+      log_e("Cannot create event spool directory");
   }
   esp_mqtt_client_config_t cfg = {};
   cfg.broker.address.uri = MQTT_URL;
@@ -453,14 +513,25 @@ void networkTask(void *) {
   cfg.credentials.authentication.key = CLIENT_KEY;
   if (String(MQTT_URL).startsWith("mqtts://"))
     mqtt = esp_mqtt_client_init(&cfg);
-  if (mqtt)
-    esp_mqtt_client_register_event(mqtt, MQTT_EVENT_ANY, mqttEvent, nullptr);
-  uint32_t next = 0, backoff = 1000;
+  if (!mqtt) {
+    log_e("MQTT client initialization failed; check mqtts:// configuration and memory");
+  } else {
+    esp_err_t rc = esp_mqtt_client_register_event(mqtt, MQTT_EVENT_ANY, mqttEvent, nullptr);
+    if (rc != ESP_OK) {
+      log_e("MQTT event registration failed: %s", esp_err_to_name(rc));
+      esp_mqtt_client_destroy(mqtt);
+      mqtt = nullptr;
+    }
+  }
+  uint32_t next = 0, backoff = 1000, lastMqttStart = 0;
   for (;;) {
     if (ETH.hasIP() && epochMs() > 1700000000000LL) {
-      if (mqtt && !mqttStarted) {
-        esp_mqtt_client_start(mqtt);
-        mqttStarted = true;
+      if (mqtt && !mqttStarted && (!lastMqttStart || millis() - lastMqttStart >= 5000)) {
+        lastMqttStart = millis();
+        esp_err_t rc = esp_mqtt_client_start(mqtt);
+        mqttStarted = rc == ESP_OK;
+        if (rc != ESP_OK)
+          log_e("MQTT client start failed: %s", esp_err_to_name(rc));
       }
       if (!maintenance && (lastRefresh == 0 || millis() - lastRefresh >= 300000 ||
                            (refreshNeeded && millis() - lastRefresh >= 5000))) {

@@ -72,7 +72,7 @@ Publish activity/checkins, QoS 1, retain=false. Payload is canonical Extended JS
 
 The service receives plain JSON fields and constructs BSON types. Existing events are never upserted with new content. delay remains zero so MQTT and Mongo contain the same immutable scan-time data.
 
-Subscribe to cards/# and readers/all/invalidate. Both plain JSON and the supplied “update epoch {document: ...}” envelope are accepted as refresh hints on cards/update and cards/insert (also delete). MQTT cannot install keys, restore permissions or alter FirstScan. Lost hints are recovered by periodic HTTPS refresh.
+Subscribe to cards/# and readers/all/invalidate. Both plain JSON and the supplied “update epoch {document: ...}” envelope are accepted as refresh hints on cards/update and cards/insert (also delete). MQTT cannot install keys, restore permissions or alter FirstScan. A hint for the active UID immediately stops a running tool; hints without a UID and readers/all/invalidate conservatively stop any running tool, including on checkout changes. This may stop a tool for a non-revoking update. Lost hints are recovered by periodic HTTPS refresh. Applying an authoritative lookup or snapshot rechecks the active tool under the state lock: a missing/revoked card, removed credential or expired checkout stops it, and a changed effective expiry resets its Ticker countdown.
 
 ## OTA and concurrency
 

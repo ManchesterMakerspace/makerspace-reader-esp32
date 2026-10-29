@@ -186,7 +186,7 @@ void webSetup() {
       r->send(503, "text/plain", "Cache key unavailable; restore configuration and restart");
       return;
     }
-    prefs.putBool("enrollOff", true);
+    checkNvsWrite("enrollOff", prefs.putBool("enrollOff", true), 1);
     {
       Lock l(stateMutex);
       configuration["enrollmentEnabled"] = false;
@@ -228,7 +228,7 @@ void webSetup() {
       configuration["toolAvailable"] = false;
       grants.clear();
     }
-    prefs.putBool("enrollOff", false);
+    checkNvsWrite("enrollOff", prefs.putBool("enrollOff", false), 1);
     saveState();
     maintenance = false;
     refreshNeeded = true;
@@ -290,9 +290,11 @@ void webSetup() {
   });
   ElegantOTA.begin(&server, WEB_USERNAME, WEB_PASSWORD);
   ElegantOTA.onStart([]() {
-    maintenance = true;
-    digitalWrite(RELAY_PIN, LOW);
-    relayOn = false;
+    {
+      Lock s(stateMutex);
+      maintenance = true;
+      stopRelay();
+    }
     saveState();
     otaActivity = millis();
   });
