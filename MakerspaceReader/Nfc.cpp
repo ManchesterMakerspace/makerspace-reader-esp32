@@ -3,7 +3,7 @@
 #include "Policy.h"
 #include "Reader.h"
 #include <MakerspacePN7160.h>
-#include <SerLCD.h>
+#include "Display.h"
 #include <SparkFun_Qwiic_Buzzer_Arduino_Library.h>
 #include <Wire.h>
 #include <esp_timer.h>
@@ -54,9 +54,8 @@ static bool reactivate() {
   return nfc.remoteDevice.getNFCIDLen() == selectedUidLength &&
          memcmp(nfc.remoteDevice.getNFCID(), selectedUid, selectedUidLength) == 0;
 }
-static SerLCD lcd;
 static QwiicBuzzer buzzer;
-static bool haveLcd = false, haveBuzzer = false;
+static bool haveBuzzer = false;
 // Fresh, bounded NCI exchange. Never inspect a buffer after timeout/short receive.
 static bool command(const uint8_t *data, uint8_t length, uint8_t *answer, uint8_t &size) {
   size = 0;
@@ -219,21 +218,16 @@ static bool enroll(Card &card) {
   refreshNeeded = true;
   return true;
 }
-static void feedback(bool success, const String &reason, const String &holder) {
+static void feedback(bool success) {
   Lock i(i2cMutex);
-  if (haveLcd) {
-    lcd.clear();
-    lcd.setBacklight(success ? 0x00FF00 : 0xFF0000);
-    lcd.print(success ? "Access granted" : reason.substring(0, 16));
-    lcd.setCursor(0, 1);
-    lcd.print(holder.substring(0, 16));
-  }
   if (haveBuzzer) {
     buzzer.configureBuzzer(success ? 2700 : 1500, success ? 100 : 350, 2);
     buzzer.on();
   }
 }
 static void scan(const String &uid, bool classic) {
+  const uint64_t presentation = display::beginPresentation();
+  display::Scan displayScan;
   Card card;
   card.uid = uid;
   bool fresh = false;
@@ -275,7 +269,7 @@ static void scan(const String &uid, bool classic) {
   }
   if (classic && !card.id.isEmpty() && card.key.isEmpty() && enrollment && !maintenance &&
       !deviceBlocked) {
-    bool enrolled = enroll(card);
+    bool enrolled = display::enrollWithFeedback(presentation, [&card]() { return enroll(card); });
     if (!enrolled)
       log_e("NFC enrollment failed; card was not authorized");
     fresh |= enrolled;
@@ -340,7 +334,16 @@ static void scan(const String &uid, bool classic) {
     auto it = cards.find(uid.c_str());
     if (it != cards.end() && it->second.key == card.key && it->second.digest == card.digest &&
         it->second.id == card.id && authorize(it->second, reason, until)) {
+      // Copy warning data from the exact state used for final authorization.
+      display::firstName(it->second.holder.c_str(), displayScan.firstName);
+      displayScan.decidedAt = epochMs();
+      displayScan.membershipExpiry = it->second.expiry;
       String role = configuration["role"] | "";
+      if (role == "tool") {
+        auto grant = grants.find(it->second.member.c_str());
+        if (grant != grants.end())
+          displayScan.checkoutExpiry = grant->second.until;
+      }
       if (role == "tool") {
         if (relayOn)
           stopRelay();
@@ -358,8 +361,11 @@ static void scan(const String &uid, bool classic) {
     }
   } else
     rejected++;
+  displayScan.allowed = allow;
+  displayScan.reason = display::reasonFrom(reason.c_str());
+  display::scanResult(presentation, displayScan);
   enqueueEvent(card, allow, reason);
-  feedback(allow, reason, card.holder);
+  feedback(allow);
 }
 static bool probe(uint8_t address) {
   for (int attempt = 0; attempt < 3; ++attempt) {
@@ -412,14 +418,6 @@ void nfcTask(void *) {
   nfcTaskHandle = xTaskGetCurrentTaskHandle();
   {
     Lock i(i2cMutex);
-    Wire.beginTransmission(0x72);
-    haveLcd = Wire.endTransmission() == 0;
-    if (haveLcd) {
-      log_i("I2C device found: SerLCD at 0x72");
-      lcd.begin(Wire);
-      lcd.setBacklight(0x0000FF);
-      lcd.print("Starting reader");
-    }
     haveBuzzer = buzzer.begin();
     if (haveBuzzer)
       log_i("I2C device found: Qwiic buzzer at 0x34");

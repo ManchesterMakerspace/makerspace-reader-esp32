@@ -34,7 +34,7 @@ extern JsonDocument configuration;
 extern uint32_t configurationSequence;
 extern std::atomic<bool> maintenance, relayOn, clockTrusted, refreshNeeded, storageOK, apiOK,
     mqttOK, nfcOK, deviceBlocked;
-extern std::atomic<int64_t> relayDeadline, toolDeadline;
+extern std::atomic<int64_t> relayDeadline, toolDeadline, relayStartedUs;
 extern std::atomic<uint32_t> accepted, rejected, dropped;
 extern String activeUid, lastError, csrf;
 extern Preferences prefs;

@@ -123,6 +123,7 @@ static void refresh() {
     checkNvsWrite("blocked", prefs.putBool("blocked", false), 1);
   }
   if (result["cards"].size() > 300 || result["grants"].size() > 150) {
+    apiOK = false;
     log_e("MongoDB API snapshot exceeds cache capacity");
     return;
   }
@@ -483,6 +484,7 @@ static void spool() {
         serializeJson(e, raw);
         sealWrite(path, raw);
       } else {
+        apiOK = false;
         log_e("MongoDB API did not acknowledge event; retained for retry");
       }
     }

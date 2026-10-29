@@ -72,6 +72,8 @@ Open the serial console at **115200 baud**. The build script selects **Core Debu
 
 Ethernet outage messages are emitted once per failure episode, with recovery logged separately. NFC retries log every three seconds. API/MQTT retries retain their existing backoff. Diagnostics contain operation names, local file paths and error codes, never credentials, keys, card contents or API response bodies.
 
+Optional LCD screens, clocks, expiry warnings, backend replacement and bench checks are documented in [Display service](docs/DISPLAY.md).
+
 ## Management
 
 All routes require the compiled-in username/password, including errors, OTA metadata and upload chunks. Serve the reader's HTTP port only on an isolated management network behind HTTPS; HTTP Basic credentials are not encrypted on the reader-to-proxy segment.
