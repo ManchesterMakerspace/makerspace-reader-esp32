@@ -1,3 +1,4 @@
+#include "FlashProfile.h"
 #include "secrets.h"
 #include "RefreshConfig.h"
 #include "EventOrder.h"
@@ -51,8 +52,8 @@ bool api(const String &path, JsonDocument &response, const String &body) {
     if (raw.length() <= 524288)
       ok = !deserializeJson(response, raw);
   }
-  if (ok && (path == "/reader/v1/snapshot" || path == "/reader/v1/config")) {
-    String id = path == "/reader/v1/snapshot" ? String(response["config"]["id"] | "")
+  if (ok && ((path == "/reader/v1/snapshot" || path == "/reader/v1/snapshot/recent") || path == "/reader/v1/config")) {
+    String id = (path == "/reader/v1/snapshot" || path == "/reader/v1/snapshot/recent") ? String(response["config"]["id"] | "")
                                               : String(response["id"] | "");
     if (id != DEVICE_ID) {
       log_e("MongoDB API returned a different reader identity: %s", path.c_str());
@@ -70,7 +71,7 @@ bool api(const String &path, JsonDocument &response, const String &body) {
   apiOK = ok;
   if (code == 401 || code == 403 || code == 409) {
     // A rejected event is retained; rejected reader authorization disables cached access.
-    if (path == "/reader/v1/snapshot" || path == "/reader/v1/cards/lookup") {
+    if ((path == "/reader/v1/snapshot" || path == "/reader/v1/snapshot/recent") || path == "/reader/v1/cards/lookup") {
       deviceBlocked = true;
       checkNvsWrite("blocked", prefs.putBool("blocked", true), 1);
       Lock s(stateMutex);
@@ -120,7 +121,14 @@ static void confirmTime(int64_t t) {
 static void refresh() {
   lastRefresh = millis();
   JsonDocument result;
-  if (!api("/reader/v1/snapshot", result)) {
+  String requestBody;
+  std::vector<std::string> requested;
+  if (readerProfile::compact) {
+    JsonDocument request; auto uids=request["uids"].to<JsonArray>();
+    { Lock s(stateMutex); for(const auto &p:cards) {uids.add(p.second.uid);requested.push_back(p.first);} }
+    serializeJson(request,requestBody);
+  }
+  if (!api(readerProfile::compact ? "/reader/v1/snapshot/recent" : "/reader/v1/snapshot", result, requestBody)) {
     refreshNeeded = true;
     return;
   }
@@ -128,7 +136,7 @@ static void refresh() {
     deviceBlocked = false;
     checkNvsWrite("blocked", prefs.putBool("blocked", false), 1);
   }
-  if (result["cards"].size() > 300 || result["grants"].size() > 150) {
+  if (result["cards"].size() > readerProfile::cards || result["grants"].size() > readerProfile::grants) {
     apiOK = false;
     log_e("MongoDB API snapshot exceeds cache capacity");
     return;
@@ -174,6 +182,7 @@ static void refresh() {
       if (previous != cards.end()) {
         if (previous->second.sourceSequence > sequence)
           c = previous->second;
+        c.lastUsed = previous->second.lastUsed;
         c.first = previous->second.first;
         c.pending = previous->second.pending;
         c.observedUs = previous->second.observedUs;
@@ -185,9 +194,9 @@ static void refresh() {
     }
     // Keep only station observation tombstones when cards disappear.
     for (auto &pair : cards)
-      if (!next.count(pair.first) && next.size() < 300 && (pair.second.first || pair.second.pending)) {
+      if (!next.count(pair.first) && next.size() < readerProfile::cards && (pair.second.first || pair.second.pending)) {
         Card c;
-        if (pair.second.sourceSequence > sequence)
+        if (pair.second.sourceSequence > sequence || (readerProfile::compact && std::find(requested.begin(),requested.end(),pair.first)==requested.end()))
           c = pair.second;
         c.uid = pair.second.uid;
         c.first = pair.second.first;
@@ -201,6 +210,7 @@ static void refresh() {
     std::unordered_map<std::string, Grant> ng;
     for (JsonObject o : result["grants"].as<JsonArray>()) {
       Grant g;
+      g.sourceSequence = sequence;
       g.member = o["memberId"] | "";
       g.id = o["checkoutId"] | "";
       g.until = o["until"] | int64_t(0);
@@ -209,7 +219,10 @@ static void refresh() {
       ng[g.member.c_str()] = g;
     }
     changed |= ng.size() != grants.size();
+    // A lookup completed after this snapshot request must not lose its grant.
+    for (const auto &p: grants) if (p.second.sourceSequence > sequence) ng[p.first]=p.second;
     grants.swap(ng);
+    trimCardCache();
     if (relayOn && toolDeadline > 0 && (oldTool != String(configuration["toolId"] | "") || oldRole != String(configuration["role"] | "")))
       stopRelay();
     recheckActiveTool();
@@ -257,7 +270,7 @@ void reserveEventSpace(size_t incoming) {
   }
   for (auto &p : files) {
     Lock f(fsMutex);
-    if (total + incoming <= 3 * 1024 * 1024 && LittleFS.usedBytes() + incoming + 640 * 1024 < LittleFS.totalBytes())
+    if (total + incoming <= readerProfile::eventBytes && LittleFS.usedBytes() + incoming + 2 * readerProfile::snapshotBytes < LittleFS.totalBytes())
       break;
     File file = LittleFS.open(p);
     if (!file) {

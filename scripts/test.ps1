@@ -2,7 +2,19 @@ $ErrorActionPreference = 'Stop'
 $readerRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Push-Location $readerRoot
 try {
+ & (Join-Path $readerRoot 'tests/flash-profile.ps1')
  New-Item -ItemType Directory -Force .test-build | Out-Null
+ Copy-Item MakerspaceReader/CachePolicy.cpp .test-build/CachePolicy.cpp -Force
+ foreach ($profileMB in @(4,8,16)) {
+  & g++ -std=c++11 -Wall -Wextra -Werror "-DREADER_PROFILE_MB=$profileMB" -I tests/cache-fakes -I MakerspaceReader tests/cache-policy.cpp .test-build/CachePolicy.cpp -o .test-build/cache-policy.exe
+  if ($LASTEXITCODE -ne 0) { throw 'Cache policy compilation failed' }
+  & ./.test-build/cache-policy.exe
+  if ($LASTEXITCODE -ne 0) { throw 'Cache policy tests failed' }
+  & g++ -std=c++11 "-DREADER_PROFILE_MB=$profileMB" -I .arduino/libraries/ArduinoJson/src tests/cache-size.cpp -o .test-build/cache-profile-size.exe
+  if ($LASTEXITCODE -ne 0) { throw 'Profile size compilation failed' }
+  & ./.test-build/cache-profile-size.exe
+  if ($LASTEXITCODE -ne 0) { throw 'Profile size tests failed' }
+ }
  & g++ -std=c++11 -Wall -Wextra -Werror tests/audio.cpp MakerspaceReader/Audio.cpp -o .test-build/audio-tests.exe
  if($LASTEXITCODE -ne 0){throw 'Audio test compilation failed'}
  & ./.test-build/audio-tests.exe

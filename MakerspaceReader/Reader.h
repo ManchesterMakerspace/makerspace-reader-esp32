@@ -1,3 +1,4 @@
+#include "FlashProfile.h"
 #pragma once
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -14,10 +15,12 @@ struct Card {
   String firstName, lastInitial;
   int64_t observedUs = 0;
   uint32_t refreshedAt = 0, sourceSequence = 0;
+  uint64_t lastUsed = 0;
 };
 struct Grant {
   String member, id;
   int64_t until = 0;
+  uint32_t sourceSequence = 0;
 };
 extern SemaphoreHandle_t stateMutex, fsMutex, i2cMutex, apiMutex, snapshotMutex;
 struct Lock {
@@ -94,3 +97,5 @@ void reserveEventSpace(size_t incoming);
 
 uint64_t reserveEventSequence();
 String eventSpoolPath(uint64_t sequence, const String &id);
+
+void trimCardCache();

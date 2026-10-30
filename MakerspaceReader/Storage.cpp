@@ -1,3 +1,4 @@
+#include "FlashProfile.h"
 #include "CacheKey.h"
 #include "Reader.h"
 #include "secrets.h"
@@ -246,6 +247,7 @@ bool saveState() {
       o["digest"] = c.digest;
       o["FirstScan"] = c.first;
       o["pending"] = c.pending;
+      o["lastUsed"] = c.lastUsed;
     }
     auto g = d["grants"].to<JsonArray>();
     for (auto &pair : grants) {
@@ -258,7 +260,7 @@ bool saveState() {
   }
   String serialized;
   serializeMsgPack(d, serialized);
-  if (serialized.length() > 320 * 1024) {
+  if (serialized.length() > readerProfile::snapshotBytes) {
     log_e("Cache snapshot exceeds 320 KiB limit");
     storageOK = false;
     return false;
@@ -289,8 +291,8 @@ void loadState() {
     return;
   }
   JsonDocument d;
-  if (deserializeMsgPack(d, raw) || d["schema"] != 1 || d["cards"].size() > 300 ||
-      d["grants"].size() > 150) {
+  if (deserializeMsgPack(d, raw) || d["schema"] != 1 || d["cards"].size() > readerProfile::cards ||
+      d["grants"].size() > readerProfile::grants) {
     log_e("Cache snapshot schema, encoding or capacity validation failed");
     storageOK = false;
     return;
@@ -310,6 +312,7 @@ void loadState() {
     c.digest = o["digest"] | "";
     c.first = o["FirstScan"] | int64_t(0);
     c.pending = o["pending"] | false;
+    c.lastUsed = o["lastUsed"] | uint64_t(0);
     cards[c.uid.c_str()] = c;
   }
   for (JsonObject o : d["grants"].as<JsonArray>()) {

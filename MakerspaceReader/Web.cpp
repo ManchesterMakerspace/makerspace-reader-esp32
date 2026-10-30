@@ -1,3 +1,4 @@
+#include "BuildInfo.h"
 #include "Reader.h"
 #include "secrets.h"
 #include <ESPAsyncWebServer.h>
@@ -113,7 +114,7 @@ void webSetup() {
     d["name"] = configuration["name"];
     d["role"] = configuration["role"];
     d["deviceId"] = DEVICE_ID;
-    d["firmware"] = "1.0.0";
+    buildStatistics(d);
     d["uptimeSeconds"] = millis() / 1000;
     d["freeHeap"] = ESP.getFreeHeap();
     d["freePSRAM"] = ESP.getFreePsram();

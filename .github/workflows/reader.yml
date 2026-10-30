@@ -6,6 +6,10 @@ jobs:
   firmware-and-host-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        flash: [4, 8, 16]
     steps:
       - uses: actions/checkout@v4
       - uses: arduino/setup-arduino-cli@v2
@@ -17,4 +21,4 @@ jobs:
         run: ./scripts/test.ps1
       - name: Compile ESP32 firmware using placeholder bench configuration
         shell: pwsh
-        run: ./scripts/build.ps1
+        run: ./scripts/build.ps1 -Fqbn "esp32:esp32:esp32s3:FlashSize=${{ matrix.flash }}M,PSRAM=opi,PartitionScheme=custom,DebugLevel=info"

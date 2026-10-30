@@ -1,3 +1,4 @@
+#include "BuildInfo.h"
 #include "Reader.h"
 #include "Display.h"
 #include "Audio.h"
@@ -151,7 +152,11 @@ void readerSetup() {
   productionReady = esp_flash_encryption_enabled() && esp_secure_boot_enabled();
 #endif
 #endif
-  initializeStorage();
+  if (!checkFlashLayout()) {
+    productionReady = false; maintenance = true;
+    lastError = "Firmware flash profile does not match installed partitions";
+    log_e("Firmware flash profile does not match installed partitions");
+  } else initializeStorage();
   if (cacheKeyReady) { restoreToolStatus(); recoverToolSession(); }
   if (configuration["name"].isNull()) {
     configuration["name"] = DEVICE_ID;

@@ -1,3 +1,4 @@
+#include "../MakerspaceReader/FlashProfile.h"
 #include <ArduinoJson.h>
 #include <cassert>
 #include <iostream>
@@ -6,7 +7,7 @@ int main() {
   JsonDocument d;
   d["schema"] = 1;
   auto a = d["cards"].to<JsonArray>();
-  for (int i = 0; i < 300; i++) {
+  for (int i = 0; i < int(readerProfile::cards); i++) {
     auto o = a.add<JsonObject>();
     o["uid"] = std::string(20, 'A');
     o["id"] = std::string(24, 'a');
@@ -23,7 +24,7 @@ int main() {
     o["pending"] = false;
   }
   auto grants = d["grants"].to<JsonArray>();
-  for (int i = 0; i < 150; i++) {
+  for (int i = 0; i < int(readerProfile::grants); i++) {
     auto o = grants.add<JsonObject>();
     o["member"] = std::string(24, 'b');
     o["id"] = std::string(24, 'c');
@@ -38,6 +39,6 @@ int main() {
   d["config"]["toolOutOfService"] = true;
   d["config"]["shopOutOfService"] = true;
   size_t size = measureMsgPack(d);
-  assert(size < 320 * 1024);
-  std::cout << "300 maximum-size cards + 150 grants: " << size << " MessagePack bytes\n";
+  assert(size < readerProfile::snapshotBytes);
+  std::cout << "Maximum-size profile cache: " << size << " MessagePack bytes\n";
 }

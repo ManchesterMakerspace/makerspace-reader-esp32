@@ -1,3 +1,4 @@
+#include "FlashProfile.h"
 #include "secrets.h"
 #include "RefreshConfig.h"
 #include "NfcProtocol.h"
@@ -257,6 +258,14 @@ static void scan(const String &uid, bool classic) {
       card.expiry = o["expiry"] | int64_t(0);
       card.key = o["credential"]["keyA"] | "";
       card.digest = o["credential"]["digest"] | "";
+      if (response.containsKey("grant")) {
+        Lock s(stateMutex);
+        if (card.sourceSequence >= configurationSequence && !card.member.isEmpty()) {
+          JsonObject g=response["grant"];
+          if(g.isNull()) grants.erase(card.member.c_str());
+          else { Grant grant;grant.sourceSequence=card.sourceSequence;grant.member=card.member;grant.id=g["checkoutId"] | "";grant.until=g["until"] | int64_t(0);grants[card.member.c_str()]=grant; }
+        }
+      }
       fresh = true;
     }
   }
@@ -272,7 +281,7 @@ static void scan(const String &uid, bool classic) {
       log_e("NFC enrollment failed; card was not authorized");
     fresh |= enrolled;
   }
-  if (fresh) {
+  if (fresh || readerProfile::compact) {
     {
       Lock s(stateMutex);
       auto current = cards.find(uid.c_str());
@@ -291,8 +300,13 @@ static void scan(const String &uid, bool classic) {
         card.pending = pending;
         card.observedUs = observed;
       }
-      if (cards.count(uid.c_str()) || cards.size() < 300)
+      if (readerProfile::compact) {
+        uint64_t newest=0; for(const auto &p:cards) newest=std::max(newest,p.second.lastUsed);
+        card.lastUsed = newest == UINT64_MAX ? newest : newest+1;
+      }
+      if (readerProfile::compact || cards.count(uid.c_str()) || cards.size() < readerProfile::cards)
         cards[uid.c_str()] = card;
+      trimCardCache();
       recheckActiveTool();
     }
     saveState();
