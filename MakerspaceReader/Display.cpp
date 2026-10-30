@@ -140,6 +140,13 @@ void Model::accept(const Presentation &p, int64_t now) {
     deadline = now + messages[index].duration;
   }
 }
+static void scroll(char *out, const char *text, int64_t now) {
+  size_t n=std::strlen(text);
+  if (n<=16) { pad(out,16,text); return; }
+  int64_t travel=int64_t(n-16)*300, phase=now%(travel+2000);
+  size_t offset=size_t(std::max<int64_t>(0,std::min(travel,phase-1000))/300);
+  pad(out,16,text+offset);
+}
 Frame Model::frame(const Status &s, int64_t now) {
   while (index < count && now >= deadline) {
     ++index;
@@ -184,6 +191,45 @@ Frame Model::frame(const Status &s, int64_t now) {
     std::snprintf(clock, sizeof(clock), "%4ds", seconds);
   } else if (s.trusted) newYorkClock(s.utcMs, clock);
   std::memcpy(f.row1 + 11, clock, 5);
+  if (s.tool && enrollment != Enrollment::running && (s.kickPending || index >= count || (s.relay && !std::strncmp(messages[index].left,"Welcome",7)))) {
+    char top[100]={}, bottomText[100]={};
+    if (s.kickPending && s.relay) {
+      std::snprintf(top,sizeof(top),"Scan same card");
+      std::snprintf(bottomText,sizeof(bottomText),"again to kick %s",s.userName); f.color=blue;
+    } else if (s.relay) {
+      std::snprintf(top,sizeof(top),"User is %s",s.userName);
+      std::snprintf(bottomText,sizeof(bottomText),"Scan to log off"); f.color=green;
+    } else if (s.haveLast && (now/24000)%2) {
+      if (!s.lastEnded || !s.trusted) std::snprintf(top,sizeof(top),"Last used: ?");
+      else if (s.utcMs-s.lastEnded<86400000) {
+        char time[6]; newYorkClock(s.lastEnded,time);
+        std::snprintf(top,sizeof(top),"Last used at %s",time);
+      } else {
+        char clock[6]; newYorkClock(s.lastEnded,clock);
+        time_t seconds=time_t(s.lastEnded/1000); tm utc={};
+#ifdef _WIN32
+        gmtime_s(&utc,&seconds);
+#else
+        gmtime_r(&seconds,&utc);
+#endif
+        int localHour=(clock[0]-'0')*10+clock[1]-'0';
+        int offset=localHour-utc.tm_hour; if(offset>0) offset-=24;
+        seconds+=offset*3600;
+#ifdef _WIN32
+        gmtime_s(&utc,&seconds);
+#else
+        gmtime_r(&seconds,&utc);
+#endif
+        std::snprintf(top,sizeof(top),"Last used at %02d/%02d/%02d",utc.tm_mon+1,utc.tm_mday,(utc.tm_year+1900)%100);
+      }
+      std::snprintf(bottomText,sizeof(bottomText),"%s",s.lastName);
+    }
+    if (top[0]) { scroll(f.row1,top,now); scroll(f.row2,bottomText,now); }
+  }
+  if (s.outOfService) {
+    f.color=red;
+    if ((now/3000)%2) pad(f.row2,16,"OUT OF SERVICE");
+  }
   return f;
 }
 }  // namespace display

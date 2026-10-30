@@ -25,3 +25,5 @@ void stopRelay();
 void startRelay(int64_t, int64_t, const String &);
 void recheckActiveTool();
 void serviceRelay();
+
+inline void endToolSession(const char * = "automatic") {}

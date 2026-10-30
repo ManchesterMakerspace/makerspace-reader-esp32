@@ -14,6 +14,7 @@ static void armRelayTimer() {
   });
 }
 void stopRelay() {
+  endToolSession();
   relayTicker.detach();
   relayOffEvent = false;
   digitalWrite(RELAY_PIN, LOW);
@@ -43,6 +44,7 @@ void recheckActiveTool() {
   String reason;
   int64_t until = 0;
   if (c == cards.end() || !authorize(c->second, reason, until)) {
+    endToolSession(c == cards.end() ? "cardRemoved" : reason.c_str());
     stopRelay();
     return;
   }
@@ -60,8 +62,9 @@ void serviceRelay() {
   // A callback from the old countdown may arrive after a scan reset it.
   // Recheck the current deadline rather than letting that event stop a new run.
   bool offEvent = relayOffEvent.exchange(false);
-  if (offEvent && relayOn && esp_timer_get_time() >= relayDeadline)
-    stopRelay();
+  if (offEvent && relayOn && esp_timer_get_time() >= relayDeadline) {
+    endToolSession("expired"); stopRelay();
+  }
   // Independent deadline guard also handles trusted-clock advances.
   if (relayOn && (maintenance || deviceBlocked || !clockTrusted ||
                   relayDeadline <= 0 || esp_timer_get_time() >= relayDeadline ||

@@ -183,9 +183,22 @@ int main() {
   screen(pulse, s, 12000, "", "Hold fob to read", white);
   assert(s.relayDeadlineMs == 12000);
   s.relay = true; s.tool = true; s.relayStartedMs = 2000;
-  screen(pulse, s, 2000, "", "Hold fob to read", white, "00:00");
-  screen(pulse, s, 3662000, "", "Hold fob to read", white, "01:01");
-  s.relay = false; s.tool = false;
+  std::strcpy(s.userName,"Ada");
+  auto active=pulse.frame(s,2000);
+  assert(std::string(active.row1)=="User is Ada     ");
+  assert(std::string(active.row2)=="Scan to log off ");
+  s.kickPending=true; assert(pulse.frame(s,2000).color==blue);
+  s.outOfService=true; auto outage=pulse.frame(s,3000);
+  assert(outage.color==red && std::string(outage.row2)=="OUT OF SERVICE  ");
+  s.kickPending=false; s.outOfService=false;
+  const auto savedUtc=s.utcMs;
+  s.relay = false; s.haveLast=true; s.lastEnded=1782907200000LL;
+  s.utcMs=s.lastEnded+86399999; std::strcpy(s.lastName,"Ada L");
+  auto recent=pulse.frame(s,24000); assert(std::string(recent.row2)=="Ada L           ");
+  s.utcMs=s.lastEnded+86400000;
+  auto dated=pulse.frame(s,24000); assert(std::string(dated.row1)!=std::string(recent.row1));
+  s.lastEnded=0; assert(std::string(pulse.frame(s,24000).row1)=="Last used: ?    ");
+  s.haveLast=false; s.tool = false; s.utcMs=savedUtc;
   // Warning messages outlive the pulse but the countdown must disappear.
   Model warnings;
   p.enrollment = Enrollment::none; warnings.accept(p, 0);

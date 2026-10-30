@@ -102,6 +102,18 @@ bool authorize(const Card &c, String &reason, int64_t &until) {
     return false;
   }
   auto g = grants.find(c.member.c_str());
+  bool running = relayOn && toolDeadline > 0;
+  if (running && (c.uid == activeUid || c.managesTool)) {
+    auto base = policy::evaluate("door", !c.id.isEmpty(), c.status.c_str(), c.expiry,
+      c.key.length() == 12 && c.digest.length() == 64, true, true, 0, epochMs());
+    if (base.allow && (c.uid != activeUid || (g != grants.end() && configuration["toolAvailable"].as<bool>()))) {
+      reason = base.reason; until = c.uid == activeUid ? std::min(c.expiry,g->second.until) : c.expiry;
+      return until > epochMs();
+    }
+  }
+  if (!running && String(configuration["role"] | "") == "tool" && toolOutOfService()) {
+    reason = "outOfService"; return false;
+  }
   String role = configuration["role"] | "";
   auto decision = policy::evaluate(role.c_str(), !c.id.isEmpty(), c.status.c_str(), c.expiry,
                                    c.key.length() == 12 && c.digest.length() == 64,
@@ -139,6 +151,7 @@ void readerSetup() {
 #endif
 #endif
   initializeStorage();
+  if (cacheKeyReady) recoverToolSession();
   if (configuration["name"].isNull()) {
     configuration["name"] = DEVICE_ID;
     configuration["role"] = "test";
@@ -192,6 +205,7 @@ void readerSetup() {
 extern void otaWatchdog();
 void readerLoop() {
   checkEthernet();
+  if (cacheKeyReady) serviceToolSession();
 #if CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
   if (pendingBootValidation && millis() > 30000 && productionReady && storageOK && nfcOK) {
     if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {

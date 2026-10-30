@@ -1,3 +1,5 @@
+#include "secrets.h"
+#include "RefreshConfig.h"
 #include "Reader.h"
 #include "secrets.h"
 #include <ETH.h>
@@ -142,7 +144,7 @@ static void refresh() {
     String oldTool = configuration["toolId"] | "", oldRole = configuration["role"] | "";
     configuration.set(result["config"]);
     configuration.remove("serverTime");
-    configuration["toolAvailable"] = result["tool"]["available"] | false;
+    updateToolStatus(result["tool"]);
     configuration["toolName"] = result["tool"]["name"] | "";
     if (prefs.getBool("enrollOff", false))
       configuration["enrollmentEnabled"] = false;
@@ -157,6 +159,9 @@ static void refresh() {
       c.id = o["_id"] | "";
       c.member = o["memberId"] | "";
       c.holder = o["holder"] | "";
+      c.firstName = o["firstName"] | "";
+      c.lastInitial = o["lastInitial"] | "";
+      c.managesTool = o["managesTool"] | false;
       c.status = o["validity"] | "unknown";
       c.expiry = o["expiry"] | int64_t(0);
       c.key = o["credential"]["keyA"] | "";
@@ -169,7 +174,7 @@ static void refresh() {
         c.pending = previous->second.pending;
         c.observedUs = previous->second.observedUs;
         auto &p = previous->second;
-        changed |= p.id != c.id || p.holder != c.holder || p.status != c.status || p.expiry != c.expiry || p.key != c.key || p.digest != c.digest || p.member != c.member;
+        changed |= p.managesTool != c.managesTool || p.firstName != c.firstName || p.lastInitial != c.lastInitial || p.id != c.id || p.holder != c.holder || p.status != c.status || p.expiry != c.expiry || p.key != c.key || p.digest != c.digest || p.member != c.member;
       } else
         changed = true;
       next[c.uid.c_str()] = c;
@@ -229,7 +234,7 @@ static std::vector<String> eventFiles() {
 }
 // Enforced before append, including while Ethernet/API/MQTT are unavailable.
 // LittleFS allocates blocks, so also reserve physical free space for both snapshots.
-static void reserveEventSpace(size_t incoming) {
+void reserveEventSpace(size_t incoming) {
   auto files = eventFiles();
   size_t total = 0;
   {
@@ -322,6 +327,8 @@ static void mqttEvent(void *, esp_event_base_t, int32_t id, void *data) {
       log_e("MQTT subscribe failed: cards/#");
     if (esp_mqtt_client_subscribe(mqtt, "readers/all/invalidate", 1) < 0)
       log_e("MQTT subscribe failed: readers/all/invalidate");
+    esp_mqtt_client_subscribe(mqtt, "tools/#", 1);
+    esp_mqtt_client_subscribe(mqtt, "shops/#", 1);
     refreshNeeded = true;
   }
   if (id == MQTT_EVENT_DISCONNECTED) {
@@ -357,6 +364,25 @@ static void mqttEvent(void *, esp_event_base_t, int32_t id, void *data) {
     mqttFragment += String(e->data, e->data_len);
     if (mqttFragment.length() != size_t(e->total_data_len))
       return;
+    if (mqttTopic.startsWith("tools/") || mqttTopic.startsWith("shops/")) {
+      int start = mqttFragment.indexOf('{');
+      JsonDocument hint;
+      if (start >= 0 && !deserializeJson(hint, mqttFragment.substring(start))) {
+        Lock s(stateMutex);
+        auto doc = hint["document"];
+        String id = doc["_id"].is<JsonObject>() ? String(doc["_id"]["$oid"] | "") : String(doc["_id"] | "");
+        bool shop = mqttTopic.startsWith("shops/");
+        if (id == String(configuration[shop ? "shopId" : "toolId"] | "")) {
+          if (doc["out_of_service"] == true) {
+            configuration[shop ? "shopOutOfService" : "toolOutOfService"] = true;
+            checkNvsWrite(shop ? "shopOosId" : "toolOosId", prefs.putString(shop ? "shopOosId" : "toolOosId", id), id.length());
+            checkNvsWrite(shop ? "shopOos" : "toolOos", prefs.putBool(shop ? "shopOos" : "toolOos", true), 1);
+          }
+          refreshNeeded = true;
+        }
+      }
+      return;
+    }
     if (mqttTopic == "readers/all/invalidate") {
       refreshNeeded = true;
       Lock s(stateMutex);
@@ -452,7 +478,7 @@ static void spool() {
         d["deviceId"]["$oid"] = DEVICE_ID;
         String payload;
         serializeJson(d, payload);
-        int id = esp_mqtt_client_enqueue(mqtt, "activity/checkins", payload.c_str(),
+        int id = esp_mqtt_client_enqueue(mqtt, e["topic"] | "activity/checkins", payload.c_str(),
                                          payload.length(), 1, 0, true);
         if (id >= 0) {
           inFlight[id] = path;
@@ -529,7 +555,7 @@ void networkTask(void *) {
         if (rc != ESP_OK)
           log_e("MQTT client start failed: %s", esp_err_to_name(rc));
       }
-      if (!maintenance && (lastRefresh == 0 || millis() - lastRefresh >= 300000 || (refreshNeeded && millis() - lastRefresh >= 5000))) {
+      if (!maintenance && (lastRefresh == 0 || millis() - lastRefresh >= READER_REFRESH_INTERVAL_MS || (refreshNeeded && millis() - lastRefresh >= 5000))) {
         refreshNeeded = false;
         refresh();
       }

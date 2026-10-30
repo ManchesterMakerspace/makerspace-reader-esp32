@@ -1,3 +1,5 @@
+#include "secrets.h"
+#include "RefreshConfig.h"
 #include "NfcProtocol.h"
 #include "Pn532.h"
 #include "Policy.h"
@@ -217,6 +219,7 @@ static bool enroll(Card &card) {
   return true;
 }
 static void scan(const String &uid, bool classic) {
+  { Lock s(stateMutex); cancelToolConfirmation(uid); }
   const uint64_t presentation = display::beginPresentation();
   display::Scan displayScan;
   Card card;
@@ -234,17 +237,21 @@ static void scan(const String &uid, bool classic) {
       fresh = true;
     }
   }
-  if (!card.refreshedAt || millis() - card.refreshedAt >= 300000 || refreshNeeded) {
+  if (!card.refreshedAt || millis() - card.refreshedAt >= READER_REFRESH_INTERVAL_MS || refreshNeeded) {
     JsonDocument request, response;
     request["uid"] = uid;
     String text;
     serializeJson(request, text);
     if (api("/reader/v1/cards/lookup", response, text)) {
+      { Lock s(stateMutex); if (response["tool"].is<JsonObject>() && response["_sequence"].as<uint32_t>() >= configurationSequence) { updateToolStatus(response["tool"]); configurationSequence = response["_sequence"]; } }
       card.refreshedAt = millis() + 1;
       card.sourceSequence = response["_sequence"];
       JsonObject o = response["document"];
       card.id = o["_id"] | "";
       card.holder = o["holder"] | "";
+      card.firstName = o["firstName"] | "";
+      card.lastInitial = o["lastInitial"] | "";
+      card.managesTool = o["managesTool"] | false;
       card.member = o["memberId"] | "";
       card.status = o["validity"] | "unknown";
       card.expiry = o["expiry"] | int64_t(0);
@@ -336,14 +343,11 @@ static void scan(const String &uid, bool classic) {
           displayScan.checkoutExpiry = grant->second.until;
       }
       if (role == "tool") {
-        if (relayOn)
-          stopRelay();
-        else
-          startRelay(until - epochMs(), until, uid);
+        allow = toolScan(it->second, until, reason);
       } else {
         startRelay(int64_t(policy::pulseSeconds(role.c_str())) * 1000, 0, "");
       }
-      accepted++;
+      if (allow) accepted++; else rejected++;
     } else {
       allow = false;
       if (reason == "activeMember")
@@ -352,10 +356,13 @@ static void scan(const String &uid, bool classic) {
     }
   } else
     rejected++;
+  if (!allow) { Lock s(stateMutex); cancelToolConfirmation(); }
   displayScan.allowed = allow;
   displayScan.reason = display::reasonFrom(reason.c_str());
   display::scanResult(presentation, displayScan);
-  enqueueEvent(card, allow, reason);
+  bool toolRole;
+  { Lock s(stateMutex); toolRole = configuration["role"] == "tool"; }
+  if (!toolRole || !allow) enqueueEvent(card, allow, reason);
   audio::play(allow ? audio::MelodyId::Coin : audio::MelodyId::MarioDied);
 }
 static bool probe(uint8_t address) {
