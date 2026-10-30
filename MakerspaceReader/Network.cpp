@@ -1,5 +1,6 @@
 #include "secrets.h"
 #include "RefreshConfig.h"
+#include "EventOrder.h"
 #include "Reader.h"
 #include "secrets.h"
 #include <ETH.h>
@@ -22,6 +23,7 @@ static std::unordered_map<int, uint32_t> inFlightAt;
 static std::atomic<bool> mqttStarted(false);
 bool api(const String &path, JsonDocument &response, const String &body) {
   Lock l(apiMutex);
+  const uint32_t statusRevision=toolStatusRevision.load();
   if (!String(API_URL).startsWith("https://") || !ETH.hasIP() || epochMs() < 1700000000000LL) {
     log_e("MongoDB API %s unavailable: HTTPS=%d, Ethernet IP=%d, TLS clock ready=%d",
           path.c_str(), String(API_URL).startsWith("https://"), ETH.hasIP(),
@@ -60,8 +62,10 @@ bool api(const String &path, JsonDocument &response, const String &body) {
     }
   }
   static uint32_t responseSequence = 0;
-  if (ok)
+  if (ok) {
     response["_sequence"] = ++responseSequence;
+    response["_statusRevision"] = statusRevision;
+  }
   http.end();
   apiOK = ok;
   if (code == 401 || code == 403 || code == 409) {
@@ -144,7 +148,7 @@ static void refresh() {
     String oldTool = configuration["toolId"] | "", oldRole = configuration["role"] | "";
     configuration.set(result["config"]);
     configuration.remove("serverTime");
-    updateToolStatus(result["tool"]);
+    updateToolStatus(result["tool"], result["_statusRevision"]);
     configuration["toolName"] = result["tool"]["name"] | "";
     if (prefs.getBool("enrollOff", false))
       configuration["enrollmentEnabled"] = false;
@@ -214,6 +218,9 @@ static void refresh() {
     saveState();
   lastRefresh = millis();
 }
+static bool eventFileLess(const String &a, const String &b) {
+  return audit::eventPathLess(a.c_str(),b.c_str());
+}
 static std::vector<String> eventFiles() {
   std::vector<String> files;
   Lock f(fsMutex);
@@ -229,7 +236,7 @@ static std::vector<String> eventFiles() {
       files.push_back(p);
     file = dir.openNextFile();
   }
-  std::sort(files.begin(), files.end());
+  std::sort(files.begin(), files.end(), eventFileLess);
   return files;
 }
 // Enforced before append, including while Ethernet/API/MQTT are unavailable.
@@ -271,19 +278,13 @@ void reserveEventSpace(size_t incoming) {
 }
 void enqueueEvent(const Card &card, bool allow, const String &reason) {
   JsonDocument e;
-  String seed;
-  uint64_t seq;
-  {
-    Lock f(fsMutex);
-    seq = prefs.getULong64("eventSeq", 0) + 1;
-    if (!seq || !checkNvsWrite("eventSeq", prefs.putULong64("eventSeq", seq), 8)) {
-      log_e("Cannot reserve NVS event sequence; audit event dropped");
-      dropped++;
-      storageOK = false;
-      return;
-    }
-    seed = String(DEVICE_ID) + ":" + String((unsigned long long)seq);
+  uint64_t seq=reserveEventSequence();
+  if (!seq) {
+    log_e("Cannot reserve NVS event sequence; audit event dropped");
+    dropped++;
+    return;
   }
+  String seed=String(DEVICE_ID) + ":" + String((unsigned long long)seq);
   uint8_t hash[32];
   mbedtls_sha256((const uint8_t *)seed.c_str(), seed.length(), hash, 0);
   String id = hexBytes(hash, 12);
@@ -310,9 +311,7 @@ void enqueueEvent(const Card &card, bool allow, const String &reason) {
   String payload;
   serializeJson(e, payload);
   reserveEventSpace(8192);
-  char prefix[22];
-  snprintf(prefix, sizeof(prefix), "%020llu-", static_cast<unsigned long long>(seq));
-  if (!sealWrite("/events/" + String(prefix) + id, payload)) {
+  if (!sealWrite(eventSpoolPath(seq,id), payload)) {
     dropped++;
     checkNvsWrite("dropped", prefs.putUInt("dropped", dropped), 4);
     storageOK = false;
@@ -327,6 +326,7 @@ static void mqttEvent(void *, esp_event_base_t, int32_t id, void *data) {
       log_e("MQTT subscribe failed: cards/#");
     if (esp_mqtt_client_subscribe(mqtt, "readers/all/invalidate", 1) < 0)
       log_e("MQTT subscribe failed: readers/all/invalidate");
+    esp_mqtt_client_subscribe(mqtt, "readers/all/refresh", 1);
     esp_mqtt_client_subscribe(mqtt, "tools/#", 1);
     esp_mqtt_client_subscribe(mqtt, "shops/#", 1);
     refreshNeeded = true;
@@ -373,16 +373,13 @@ static void mqttEvent(void *, esp_event_base_t, int32_t id, void *data) {
         String id = doc["_id"].is<JsonObject>() ? String(doc["_id"]["$oid"] | "") : String(doc["_id"] | "");
         bool shop = mqttTopic.startsWith("shops/");
         if (id == String(configuration[shop ? "shopId" : "toolId"] | "")) {
-          if (doc["out_of_service"] == true) {
-            configuration[shop ? "shopOutOfService" : "toolOutOfService"] = true;
-            checkNvsWrite(shop ? "shopOosId" : "toolOosId", prefs.putString(shop ? "shopOosId" : "toolOosId", id), id.length());
-            checkNvsWrite(shop ? "shopOos" : "toolOos", prefs.putBool(shop ? "shopOos" : "toolOos", true), 1);
-          }
+          if (doc["out_of_service"] == true) latchToolOutage(shop,id);
           refreshNeeded = true;
         }
       }
       return;
     }
+    if (mqttTopic == "readers/all/refresh") { refreshNeeded=true; return; }
     if (mqttTopic == "readers/all/invalidate") {
       refreshNeeded = true;
       Lock s(stateMutex);
@@ -439,7 +436,7 @@ static void spool() {
   }
   static String cursor;
   auto files = eventFiles();
-  std::rotate(files.begin(), std::upper_bound(files.begin(), files.end(), cursor), files.end());
+  std::rotate(files.begin(), std::upper_bound(files.begin(), files.end(), cursor, eventFileLess), files.end());
   unsigned dbAttempts = 0, mqttAttempts = 0;
   for (auto &path : files) {
     String raw;

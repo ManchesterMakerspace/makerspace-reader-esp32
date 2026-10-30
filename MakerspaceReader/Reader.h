@@ -63,7 +63,7 @@ bool decodeHex(const String &, uint8_t *, size_t);
 
 // Relay transitions and authorization rechecks require stateMutex held.
 // serviceRelay acquires it itself; the Ticker callback only posts an atomic event.
-void stopRelay();
+void stopRelay(const char *reason = "automatic", const Card *actor = nullptr);
 void startRelay(int64_t durationMs, int64_t until, const String &uid);
 void recheckActiveTool();
 void serviceRelay();
@@ -82,9 +82,15 @@ void endToolSession(const char *reason = "automatic", const Card *actor = nullpt
 void recoverToolSession();
 void serviceToolSession();
 bool toolOutOfService();
-void updateToolStatus(JsonVariantConst);
+extern std::atomic<uint32_t> toolStatusRevision;
+void restoreToolStatus();
+void latchToolOutage(bool shop, const String &id);
+void updateToolStatus(JsonVariantConst, uint32_t revision);
 namespace display { struct Status; }
 void toolDisplayStatus(display::Status &);
 
 void cancelToolConfirmation(const String &uid = "");
 void reserveEventSpace(size_t incoming);
+
+uint64_t reserveEventSequence();
+String eventSpoolPath(uint64_t sequence, const String &id);

@@ -13,26 +13,56 @@ static bool haveLast = false;
 void cancelToolConfirmation(const String &uid) {
   if (uid.isEmpty() || session.candidateUid != uid.c_str()) session.cancelConfirmation();
 }
+std::atomic<uint32_t> toolStatusRevision(0);
+static bool statusDurable = true;
 bool toolOutOfService() {
-  return (configuration["toolOutOfService"] | false) || (configuration["shopOutOfService"] | false)
-      || (prefs.getString("toolOosId", "") == String(configuration["toolId"] | "") && prefs.getBool("toolOos", false))
-      || (prefs.getString("shopOosId", "") == String(configuration["shopId"] | "") && prefs.getBool("shopOos", false));
+  return !statusDurable || (configuration["toolOutOfService"] | false) || (configuration["shopOutOfService"] | false);
 }
-void updateToolStatus(JsonVariantConst tool) {
-  configuration["toolAvailable"] = tool["enabled"] | false;
-  for (const char *key : {"shopId", "shopName"}) configuration[key] = tool[key];
-  configuration["toolName"] = tool["name"] | "";
-  for (bool shop : {false,true}) {
-    const char *key = shop ? "shopOutOfService" : "toolOutOfService";
-    if (!tool[key].is<bool>()) continue; // Missing status never clears a latch.
-    bool value = tool[key].as<bool>();
-    String id=configuration[shop ? "shopId" : "toolId"] | "";
-    if (prefs.getString(shop ? "shopOosId" : "toolOosId", "") != id)
-      checkNvsWrite(shop ? "shopOosId" : "toolOosId",prefs.putString(shop ? "shopOosId" : "toolOosId",id),id.length());
-    configuration[key] = value;
-    if (prefs.getBool(shop ? "shopOos" : "toolOos", false) != value)
-      checkNvsWrite(shop ? "shopOos" : "toolOos", prefs.putBool(shop ? "shopOos" : "toolOos", value), 1);
+static bool saveToolStatus() {
+  JsonDocument d;
+  for (const char *key : {"toolId", "toolName", "shopId", "shopName", "toolOutOfService", "shopOutOfService", "toolAvailable"}) d[key]=configuration[key];
+  String raw; serializeJson(d,raw);
+  if (prefs.getString("toolStatus", "") == raw) { statusDurable=true; return true; }
+  statusDurable=checkNvsWrite("toolStatus",prefs.putString("toolStatus",raw),raw.length());
+  return statusDurable;
+}
+void restoreToolStatus() {
+  String raw=prefs.getString("toolStatus","");
+  JsonDocument d;
+  if (raw.length()) {
+    if (deserializeJson(d,raw) || !d["toolOutOfService"].is<bool>() || !d["shopOutOfService"].is<bool>()) {
+      statusDurable=false; return;
+    }
+    if (String(d["toolId"] | "") == String(configuration["toolId"] | "")) {
+      for (const char *key : {"toolName", "shopId", "shopName", "toolOutOfService", "shopOutOfService", "toolAvailable"}) configuration[key]=d[key];
+      return;
+    }
   }
+  // Legacy split keys can only add an outage, never clear cached evidence.
+  for (bool shop : {false,true}) {
+    if (prefs.getBool(shop ? "shopOos" : "toolOos",false) &&
+        (shop || prefs.getString("toolOosId","") == String(configuration["toolId"] | "")))
+      configuration[shop ? "shopOutOfService" : "toolOutOfService"]=true;
+  }
+}
+void latchToolOutage(bool shop, const String &id) {
+  if (id != String(configuration[shop ? "shopId" : "toolId"] | "")) return;
+  ++toolStatusRevision;
+  configuration[shop ? "shopOutOfService" : "toolOutOfService"]=true;
+  saveToolStatus();
+}
+void updateToolStatus(JsonVariantConst tool, uint32_t revision) {
+  // Restore the atomic status record after configuration.set(), even when a
+  // snapshot was started before a newer MQTT outage arrived.
+  restoreToolStatus();
+  if (revision != toolStatusRevision.load()) { refreshNeeded=true; return; }
+  if (!tool["enabled"].is<bool>() || !tool["toolOutOfService"].is<bool>() || !tool["shopOutOfService"].is<bool>()) {
+    refreshNeeded=true; return;
+  }
+  configuration["toolAvailable"]=tool["enabled"];
+  for (const char *key : {"shopId","shopName","toolOutOfService","shopOutOfService"}) configuration[key]=tool[key];
+  configuration["toolName"]=tool["name"] | "";
+  saveToolStatus();
 }
 static String segment(String s) {
   s.replace("%","%25"); s.replace("/","%2F"); s.replace("+","%2B"); s.replace("#","%23"); return s;
@@ -44,12 +74,15 @@ static String randomId() {
 static bool writeJournal(const JsonDocument &d) {
   String raw; serializeJson(d,raw); return sealWrite("/tool-session",raw);
 }
-static bool spoolSessionEvent(JsonVariantConst doc, const char *collection, const String &topic) {
+static bool spoolSessionEvent(JsonVariantConst doc, uint64_t sequence, const char *collection, const String &topic) {
+  if (!sequence) return false;
   JsonDocument e; e["document"].set(doc); e["collection"]=collection;
   e["topic"]=topic; e["dbAck"]=false; e["mqttAck"]=false;
   String raw; serializeJson(e,raw);
-  String path="/events/session-" + String(doc["_id"] | "");
-  { Lock f(fsMutex); if (LittleFS.exists(path)) return true; }
+  String path=eventSpoolPath(sequence,doc["_id"] | "");
+  // Preserve an existing legacy file and its acknowledgment state on upgrade.
+  String legacy="/events/session-" + String(doc["_id"] | "");
+  { Lock f(fsMutex); if (LittleFS.exists(path) || LittleFS.exists(legacy)) return true; }
   reserveEventSpace(8192);
   return sealWrite(path,raw);
 }
@@ -69,6 +102,9 @@ void endToolSession(const char *reason, const Card *actor) {
   } else d["kickedBy"]=nullptr;
   lastEnded=d["time"] | int64_t(0);
   lastName=activeName; lastInitial=journal["lastInitial"] | ""; haveLast=true;
+  // Reserve at termination, not checkin: intervening rejections must sort first.
+  if (!(journal["startSequence"] | uint64_t(0))) journal["startSequence"]=reserveEventSequence();
+  journal["endSequence"]=(journal["startSequence"] | uint64_t(0)) ? reserveEventSequence() : 0;
   pendingEnd=true; session.end();
 }
 bool toolScan(const Card &c, int64_t until, String &reason) {
@@ -82,10 +118,13 @@ bool toolScan(const Card &c, int64_t until, String &reason) {
   if (action==toolsession::Action::denied) { reason="toolUnavailable"; return false; }
   if (action==toolsession::Action::confirmKick) { reason="confirmKick"; return true; }
   if (action==toolsession::Action::logoff || action==toolsession::Action::kick) {
-    endToolSession(action==toolsession::Action::kick ? "kicked" : "logoff",action==toolsession::Action::kick ? &c : nullptr);
-    stopRelay(); reason="sessionEnded"; return true;
+    stopRelay(action==toolsession::Action::kick ? "kicked" : "logoff",action==toolsession::Action::kick ? &c : nullptr);
+    reason="sessionEnded"; return true;
   }
+  uint64_t startSequence=reserveEventSequence();
+  if (!startSequence) { reason="sessionSequenceUnavailable"; return false; }
   journal.clear();
+  journal["startSequence"]=startSequence;
   String id=randomId(); journal["endId"]=randomId();
   String route=segment(configuration["shopName"] | "")+"/"+segment(configuration["toolName"] | "");
   journal["route"]=route;
@@ -102,26 +141,62 @@ bool toolScan(const Card &c, int64_t until, String &reason) {
     reason="sessionPersistenceFailed"; storageOK=false; maintenance=true; return false;
   }
   session.begin(id.c_str(),actor);
-  if (!spoolSessionEvent(d,"checkins","activity/checkins/"+route)) {
+  if (!spoolSessionEvent(d,startSequence,"checkins","activity/checkins/"+route)) {
     endToolSession("startFailed"); reason="sessionPersistenceFailed"; storageOK=false; return false;
   }
   startRelay(until-epochMs(),until,c.uid); reason="activeMember"; return true;
 }
 void serviceToolSession() {
   JsonDocument copy;
-  { Lock s(stateMutex); if (!pendingEnd) return; copy.set(journal); }
+  {
+    Lock s(stateMutex);
+    if (!pendingEnd) return;
+    // Missing keys occur in legacy journals or after a failed NVS reservation.
+    // Keep successful reservations in RAM through write retries, and commit
+    // both keys with the journal before creating any corresponding spool file.
+    for (const char *key : {"startSequence","endSequence"}) {
+      if (!(journal[key] | uint64_t(0))) {
+        uint64_t sequence=reserveEventSequence();
+        if (!sequence) return;
+        journal[key]=sequence;
+      }
+    }
+    copy.set(journal);
+  }
   if (!writeJournal(copy)) return;
   String route=copy["route"] | "";
-  if (!spoolSessionEvent(copy["start"],"checkins","activity/checkins/"+route) ||
-      !spoolSessionEvent(copy["end"],"checkend","activity/checkends/"+route)) return;
+  if (!spoolSessionEvent(copy["start"],copy["startSequence"],"checkins","activity/checkins/"+route) ||
+      !spoolSessionEvent(copy["end"],copy["endSequence"],"checkend","activity/checkends/"+route)) return;
   copy["closed"]=true;
   if (!writeJournal(copy)) return;
   { Lock s(stateMutex); journal.set(copy); pendingEnd=false; }
 }
+static bool objectId(JsonVariantConst v) {
+  const char *s=v.as<const char *>(); if (!s || strlen(s)!=24) return false;
+  for (unsigned i=0;i<24;i++) if (!((s[i]>='0' && s[i]<='9') || (s[i]>='a' && s[i]<='f'))) return false;
+  return true;
+}
+static bool validJournal(const JsonDocument &d) {
+  auto start=d["start"]; auto end=d["end"];
+  for (const char *key : {"startSequence","endSequence"})
+    if (!d[key].isNull() && (!d[key].is<uint64_t>() || d[key].as<uint64_t>()==0)) return false;
+  if (!d["startSequence"].isNull() && !d["endSequence"].isNull() &&
+      d["endSequence"].as<uint64_t>()<=d["startSequence"].as<uint64_t>()) return false;
+  if (!objectId(start["_id"]) || !objectId(d["endId"]) || !start["uid"].is<const char *>() ||
+      !start["memberId"].is<const char *>() || !d["route"].is<const char *>() ||
+      String(start["uid"] | "").length()==0 || String(start["memberId"] | "").length()==0) return false;
+  if (end.isNull()) return !(d["closed"] | false);
+  return end.is<JsonObjectConst>() && String(end["_id"] | "")==String(d["endId"] | "") &&
+      String(end["checkinId"] | "")==String(start["_id"] | "") &&
+      String(end["uid"] | "")==String(start["uid"] | "") &&
+      end["time"].is<int64_t>() && end["time"].as<int64_t>()>=0 && end["kicked"].is<bool>();
+}
 void recoverToolSession() {
   { Lock f(fsMutex); if (!LittleFS.exists("/tool-session")) return; }
   String raw;
-  if (!sealRead("/tool-session",raw) || deserializeJson(journal,raw)) { maintenance=true; return; }
+  if (!sealRead("/tool-session",raw) || deserializeJson(journal,raw) || !validJournal(journal)) {
+    maintenance=true; storageOK=false; return;
+  }
   activeName=journal["firstName"] | "";
   if (!journal["end"].isNull()) {
     haveLast=true; lastName=activeName; lastInitial=journal["lastInitial"] | "";
@@ -138,5 +213,5 @@ void toolDisplayStatus(display::Status &s) {
   s.kickPending=session.confirmationUntil>esp_timer_get_time()/1000;
   snprintf(s.userName,sizeof(s.userName),"%s",activeName.c_str());
   snprintf(s.lastName,sizeof(s.lastName),"%s %s",lastName.c_str(),lastInitial.c_str());
-  s.haveLast=haveLast; s.lastEnded=lastEnded;
+  s.haveLast=haveLast && String(journal["start"]["toolId"] | "") == String(configuration["toolId"] | ""); s.lastEnded=lastEnded;
 }

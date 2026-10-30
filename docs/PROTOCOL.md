@@ -113,3 +113,44 @@ snapshots retain current grants during an outage and distinguish enabled from
 available. Subscribe to tools/# and shops/# in addition to existing topics. Deploy
 the gateway and broker ACL changes before this firmware. Earlier gateway responses
 without enabled deny tool starts. No environment variables are added.
+
+
+## Recovery and outage review corrections
+
+Recovery validates journal IDs, owner binding, end linkage and timestamp before
+admitting scans; malformed journals fail closed. The host suite compiles the real
+session service with flash/NVS fault injection and cuts power around every end
+commit boundary. Recovery can redeliver an acknowledged event if the final closed
+marker was not committed, but must preserve its ID and immutable payload. MQTT
+consumers must still deduplicate; this is at-least-once delivery, not exactly once.
+
+Service status now uses one atomic NVS string (toolStatus), including tool/shop
+identity and both flags. This record overrides an older snapshot on boot. Legacy
+split-key outage evidence is conservatively retained until an authoritative
+refresh. An API response carries the locally captured status revision from before
+the request; a newer MQTT outage prevents that response from clearing the latch.
+Failed status persistence blocks new tool starts. Status updates never directly
+stop an active session. The relay is driven LOW before session audit construction.
+
+MQTT reconnect/recovery hints now use readers/all/refresh (subscribe in broker ACLs), which requests authoritative verification without shutting off a tool. Actual authorization mutations retain readers/all/invalidate.
+
+
+## Chronological session spool ordering
+
+All newly created audit events share the durable NVS eventSeq counter. Session
+checkins reserve startSequence before the start journal is committed; checkends
+reserve endSequence at termination, after any events created during the session.
+These are journal metadata, not changes to MongoDB/MQTT documents or event IDs.
+Before spooling either event, its sequence is committed with the journal. Retries
+and recovery reuse the committed sequence and the existing immutable event ID.
+A lost reservation before journal commit can leave a harmless counter gap; no
+spool file is written with an uncommitted ordering key. Failed/overflowed sequence
+reservations never create sequence-zero filenames or authorize a new tool start.
+
+Session filenames now use /events/<20-digit sequence>-<event ID>, matching checkins
+and rejections. Eviction and replay cursor traversal use the same ordering.
+Pre-upgrade session-<ID> files contain no historical ordering key, so their precise
+creation order cannot be recovered. They retain their IDs and acknowledgment state
+and are conservatively drained/evicted before sequenced records. Legacy journals
+receive keys before replay; existing legacy spool files are not renamed because
+the encrypted file's pathname is authenticated data.

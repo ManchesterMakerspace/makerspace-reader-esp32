@@ -10,7 +10,7 @@ function Arduino([string[]]$Arguments) {
  if($LASTEXITCODE -ne 0){throw 'Arduino dependency setup failed'}
 }
 Arduino @('core','update-index','--additional-urls','https://espressif.github.io/arduino-esp32/package_esp32_index.json')
-Arduino @('core','install','esp32:esp32@3.3.12')
+Arduino @('core','install','esp32:esp32@3.3.12','--additional-urls','https://espressif.github.io/arduino-esp32/package_esp32_index.json')
 Arduino @('lib','update-index')
 Arduino @('lib','install','ArduinoJson@7.4.3','Adafruit BusIO@1.17.4','RTClib@2.1.4','SparkFun SerLCD Arduino Library@1.0.9','SparkFun Qwiic Buzzer Library@1.1.0','SparkFun Toolkit@1.2.0')
 $downloads = Join-Path $sketchbook 'downloads'

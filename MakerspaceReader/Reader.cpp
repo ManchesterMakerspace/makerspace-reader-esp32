@@ -108,7 +108,8 @@ bool authorize(const Card &c, String &reason, int64_t &until) {
       c.key.length() == 12 && c.digest.length() == 64, true, true, 0, epochMs());
     if (base.allow && (c.uid != activeUid || (g != grants.end() && configuration["toolAvailable"].as<bool>()))) {
       reason = base.reason; until = c.uid == activeUid ? std::min(c.expiry,g->second.until) : c.expiry;
-      return until > epochMs();
+      if (until <= epochMs()) { reason="checkoutExpired"; return false; }
+      return true;
     }
   }
   if (!running && String(configuration["role"] | "") == "tool" && toolOutOfService()) {
@@ -151,7 +152,7 @@ void readerSetup() {
 #endif
 #endif
   initializeStorage();
-  if (cacheKeyReady) recoverToolSession();
+  if (cacheKeyReady) { restoreToolStatus(); recoverToolSession(); }
   if (configuration["name"].isNull()) {
     configuration["name"] = DEVICE_ID;
     configuration["role"] = "test";
