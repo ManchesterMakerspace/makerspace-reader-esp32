@@ -30,6 +30,8 @@ struct Preferences {
   std::map<std::string,std::string> values; bool fail=false;
   String getString(const char *k,const char *d){return values.count(k)?values[k]:d;}
   size_t putString(const char *k,const String &v){if(fail)return 0;values[k]=v;return v.length();}
+  uint64_t getULong64(const char *k,uint64_t d){return values.count(k)?std::stoull(values[k]):d;}
+  size_t putULong64(const char *k,uint64_t v){if(fail)return 0;values[k]=std::to_string(v);return 8;}
   bool getBool(const char *k,bool d){return values.count(k)?values[k]=="true":d;}
 };
 extern Preferences prefs;
@@ -44,3 +46,6 @@ void startRelay(int64_t,int64_t,const String &);
 void stopRelay(const char *reason = "automatic", const Card *actor = nullptr);
 void endToolSession(const char * = "automatic",const Card * = nullptr);
 
+
+uint64_t reserveEventSequence();
+String eventSpoolPath(uint64_t sequence, const String &id);

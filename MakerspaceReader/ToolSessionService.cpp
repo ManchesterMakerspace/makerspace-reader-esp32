@@ -74,12 +74,15 @@ static String randomId() {
 static bool writeJournal(const JsonDocument &d) {
   String raw; serializeJson(d,raw); return sealWrite("/tool-session",raw);
 }
-static bool spoolSessionEvent(JsonVariantConst doc, const char *collection, const String &topic) {
+static bool spoolSessionEvent(JsonVariantConst doc, uint64_t sequence, const char *collection, const String &topic) {
+  if (!sequence) return false;
   JsonDocument e; e["document"].set(doc); e["collection"]=collection;
   e["topic"]=topic; e["dbAck"]=false; e["mqttAck"]=false;
   String raw; serializeJson(e,raw);
-  String path="/events/session-" + String(doc["_id"] | "");
-  { Lock f(fsMutex); if (LittleFS.exists(path)) return true; }
+  String path=eventSpoolPath(sequence,doc["_id"] | "");
+  // Preserve an existing legacy file and its acknowledgment state on upgrade.
+  String legacy="/events/session-" + String(doc["_id"] | "");
+  { Lock f(fsMutex); if (LittleFS.exists(path) || LittleFS.exists(legacy)) return true; }
   reserveEventSpace(8192);
   return sealWrite(path,raw);
 }
@@ -99,6 +102,9 @@ void endToolSession(const char *reason, const Card *actor) {
   } else d["kickedBy"]=nullptr;
   lastEnded=d["time"] | int64_t(0);
   lastName=activeName; lastInitial=journal["lastInitial"] | ""; haveLast=true;
+  // Reserve at termination, not checkin: intervening rejections must sort first.
+  if (!(journal["startSequence"] | uint64_t(0))) journal["startSequence"]=reserveEventSequence();
+  journal["endSequence"]=(journal["startSequence"] | uint64_t(0)) ? reserveEventSequence() : 0;
   pendingEnd=true; session.end();
 }
 bool toolScan(const Card &c, int64_t until, String &reason) {
@@ -115,7 +121,10 @@ bool toolScan(const Card &c, int64_t until, String &reason) {
     stopRelay(action==toolsession::Action::kick ? "kicked" : "logoff",action==toolsession::Action::kick ? &c : nullptr);
     reason="sessionEnded"; return true;
   }
+  uint64_t startSequence=reserveEventSequence();
+  if (!startSequence) { reason="sessionSequenceUnavailable"; return false; }
   journal.clear();
+  journal["startSequence"]=startSequence;
   String id=randomId(); journal["endId"]=randomId();
   String route=segment(configuration["shopName"] | "")+"/"+segment(configuration["toolName"] | "");
   journal["route"]=route;
@@ -132,18 +141,32 @@ bool toolScan(const Card &c, int64_t until, String &reason) {
     reason="sessionPersistenceFailed"; storageOK=false; maintenance=true; return false;
   }
   session.begin(id.c_str(),actor);
-  if (!spoolSessionEvent(d,"checkins","activity/checkins/"+route)) {
+  if (!spoolSessionEvent(d,startSequence,"checkins","activity/checkins/"+route)) {
     endToolSession("startFailed"); reason="sessionPersistenceFailed"; storageOK=false; return false;
   }
   startRelay(until-epochMs(),until,c.uid); reason="activeMember"; return true;
 }
 void serviceToolSession() {
   JsonDocument copy;
-  { Lock s(stateMutex); if (!pendingEnd) return; copy.set(journal); }
+  {
+    Lock s(stateMutex);
+    if (!pendingEnd) return;
+    // Missing keys occur in legacy journals or after a failed NVS reservation.
+    // Keep successful reservations in RAM through write retries, and commit
+    // both keys with the journal before creating any corresponding spool file.
+    for (const char *key : {"startSequence","endSequence"}) {
+      if (!(journal[key] | uint64_t(0))) {
+        uint64_t sequence=reserveEventSequence();
+        if (!sequence) return;
+        journal[key]=sequence;
+      }
+    }
+    copy.set(journal);
+  }
   if (!writeJournal(copy)) return;
   String route=copy["route"] | "";
-  if (!spoolSessionEvent(copy["start"],"checkins","activity/checkins/"+route) ||
-      !spoolSessionEvent(copy["end"],"checkend","activity/checkends/"+route)) return;
+  if (!spoolSessionEvent(copy["start"],copy["startSequence"],"checkins","activity/checkins/"+route) ||
+      !spoolSessionEvent(copy["end"],copy["endSequence"],"checkend","activity/checkends/"+route)) return;
   copy["closed"]=true;
   if (!writeJournal(copy)) return;
   { Lock s(stateMutex); journal.set(copy); pendingEnd=false; }
@@ -155,6 +178,10 @@ static bool objectId(JsonVariantConst v) {
 }
 static bool validJournal(const JsonDocument &d) {
   auto start=d["start"]; auto end=d["end"];
+  for (const char *key : {"startSequence","endSequence"})
+    if (!d[key].isNull() && (!d[key].is<uint64_t>() || d[key].as<uint64_t>()==0)) return false;
+  if (!d["startSequence"].isNull() && !d["endSequence"].isNull() &&
+      d["endSequence"].as<uint64_t>()<=d["startSequence"].as<uint64_t>()) return false;
   if (!objectId(start["_id"]) || !objectId(d["endId"]) || !start["uid"].is<const char *>() ||
       !start["memberId"].is<const char *>() || !d["route"].is<const char *>() ||
       String(start["uid"] | "").length()==0 || String(start["memberId"] | "").length()==0) return false;

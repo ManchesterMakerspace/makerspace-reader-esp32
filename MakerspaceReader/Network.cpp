@@ -1,5 +1,6 @@
 #include "secrets.h"
 #include "RefreshConfig.h"
+#include "EventOrder.h"
 #include "Reader.h"
 #include "secrets.h"
 #include <ETH.h>
@@ -217,6 +218,9 @@ static void refresh() {
     saveState();
   lastRefresh = millis();
 }
+static bool eventFileLess(const String &a, const String &b) {
+  return audit::eventPathLess(a.c_str(),b.c_str());
+}
 static std::vector<String> eventFiles() {
   std::vector<String> files;
   Lock f(fsMutex);
@@ -232,7 +236,7 @@ static std::vector<String> eventFiles() {
       files.push_back(p);
     file = dir.openNextFile();
   }
-  std::sort(files.begin(), files.end());
+  std::sort(files.begin(), files.end(), eventFileLess);
   return files;
 }
 // Enforced before append, including while Ethernet/API/MQTT are unavailable.
@@ -274,19 +278,13 @@ void reserveEventSpace(size_t incoming) {
 }
 void enqueueEvent(const Card &card, bool allow, const String &reason) {
   JsonDocument e;
-  String seed;
-  uint64_t seq;
-  {
-    Lock f(fsMutex);
-    seq = prefs.getULong64("eventSeq", 0) + 1;
-    if (!seq || !checkNvsWrite("eventSeq", prefs.putULong64("eventSeq", seq), 8)) {
-      log_e("Cannot reserve NVS event sequence; audit event dropped");
-      dropped++;
-      storageOK = false;
-      return;
-    }
-    seed = String(DEVICE_ID) + ":" + String((unsigned long long)seq);
+  uint64_t seq=reserveEventSequence();
+  if (!seq) {
+    log_e("Cannot reserve NVS event sequence; audit event dropped");
+    dropped++;
+    return;
   }
+  String seed=String(DEVICE_ID) + ":" + String((unsigned long long)seq);
   uint8_t hash[32];
   mbedtls_sha256((const uint8_t *)seed.c_str(), seed.length(), hash, 0);
   String id = hexBytes(hash, 12);
@@ -313,9 +311,7 @@ void enqueueEvent(const Card &card, bool allow, const String &reason) {
   String payload;
   serializeJson(e, payload);
   reserveEventSpace(8192);
-  char prefix[22];
-  snprintf(prefix, sizeof(prefix), "%020llu-", static_cast<unsigned long long>(seq));
-  if (!sealWrite("/events/" + String(prefix) + id, payload)) {
+  if (!sealWrite(eventSpoolPath(seq,id), payload)) {
     dropped++;
     checkNvsWrite("dropped", prefs.putUInt("dropped", dropped), 4);
     storageOK = false;
@@ -440,7 +436,7 @@ static void spool() {
   }
   static String cursor;
   auto files = eventFiles();
-  std::rotate(files.begin(), std::upper_bound(files.begin(), files.end(), cursor), files.end());
+  std::rotate(files.begin(), std::upper_bound(files.begin(), files.end(), cursor, eventFileLess), files.end());
   unsigned dbAttempts = 0, mqttAttempts = 0;
   for (auto &path : files) {
     String raw;

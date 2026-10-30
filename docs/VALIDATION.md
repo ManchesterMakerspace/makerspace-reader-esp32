@@ -88,3 +88,13 @@ push and pull request. Linux Wire.h casing is supplied explicitly by the runner.
 Review validation: full firmware host suite passed, including production-service power-cut and NVS tests; gateway TypeScript build and concurrency regressions passed. Both workflow YAML files parse on Linux. Hosted GitHub jobs have been configured but have not been run from this local checkout.
 
 Final review checks: firmware host suite and expanded production-service fault-injection tests passed; gateway build and all 26 suites / 97 tests passed; final ESP32 build passed (1,132,244 bytes flash, 36,276 bytes static RAM). Hardware power-cut and relay/LCD commissioning remains separate from the simulated fault tests.
+
+
+Chronological spool regression coverage in tests/session-service.cpp exercises the
+production allocator and session service: start/rejection/end interleaving under
+capacity pressure, padded digit boundaries, stable keys through failed journal
+writes and reboot, stable replay IDs/payloads, NVS failure and overflow, and legacy
+backlog ordering with acknowledgment preservation. scripts/test.ps1 runs these
+cases, so the existing push/PR GitHub workflow includes them automatically.
+
+Spool-order fix validation: full host suite passed; final ESP32-S3 firmware build passed (1,134,620 bytes flash, 36,276 bytes static RAM). The incremental build includes the final empty-cursor ordering fix.

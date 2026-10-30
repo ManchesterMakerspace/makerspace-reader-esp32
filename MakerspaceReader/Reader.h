@@ -91,3 +91,6 @@ void toolDisplayStatus(display::Status &);
 
 void cancelToolConfirmation(const String &uid = "");
 void reserveEventSpace(size_t incoming);
+
+uint64_t reserveEventSequence();
+String eventSpoolPath(uint64_t sequence, const String &id);
