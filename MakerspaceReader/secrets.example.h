@@ -15,3 +15,6 @@
 
 // Format only fully erased LittleFS when the reader NVS namespace is empty.
 #define READER_FORMAT_NEW_FS 1
+
+// Snapshot and card freshness interval; may also be set with compiler -D.
+// #define READER_REFRESH_INTERVAL_MS 900000UL

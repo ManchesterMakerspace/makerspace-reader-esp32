@@ -60,6 +60,7 @@ static void task(void *) {
       s.tool = toolDeadline > 0;
       s.relayDeadlineMs = relayDeadline / 1000;
       s.relayStartedMs = relayStartedUs / 1000;
+      toolDisplayStatus(s);
       xSemaphoreGive(stateMutex);
       s.net = ETH.linkUp() && ETH.hasIP();
       // No state or mailbox lock is held during backend I/O.

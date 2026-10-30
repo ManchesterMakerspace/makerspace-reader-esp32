@@ -60,3 +60,16 @@ The sketch now includes MakerspacePN7160.h from the bundled, patched ELECHOUSE 3
 - The installed NFC sources and every file extracted from .arduino/downloads/MakerspacePN7160.zip match the vendored files by SHA-256. The packaging script parses successfully; changed-file whitespace checks pass.
 - README and vendor instructions now document Arduino IDE ZIP installation, duplicate library handling, and verbose dependency verification. No API, environment-variable inventory, or deployed wiki flow changed; no wiki update applies to this development setup correction.
 - No physical hardware test or Arduino IDE GUI compilation was performed. The CLI check exercises Arduino dependency resolution with both libraries present; hardware acceptance remains required.
+
+## Tool-session validation — 2026-10-30
+
+- Firmware host suite: passed, including session policy, display, relay, NFC,
+  audio, cache-key and cache-size fixtures.
+- Expanded cache fixture: 211,315 bytes for 300 cards and 150 grants; below 320 KiB.
+- Companion ts-data-api: TypeScript build passed; 25 suites / 86 tests passed
+  against disposable MongoDB, including outage grant retention, scoped kick
+  permission, checkend insertion, idempotent replay and conflicting actor rejection.
+- ToolSessionService.cpp: direct ESP32 compiler syntax check passed.
+- Hardware relay, power-loss interruption, broker reconnect/PUBACK loss and LCD
+  timing scenarios are not bench-verified; follow COMMISSIONING.md before rollout.
+- Clean ESP32-S3 firmware build passed: 1,128,936 bytes flash (26% of 4 MiB application slot), 36,268 bytes static RAM (11%). ArduinoJson 7.4.3 and the pinned patched vendor dependencies are restored locally.

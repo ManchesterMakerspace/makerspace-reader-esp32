@@ -44,3 +44,17 @@ Do not “repair” an unreadable cache by restoring old counters. Preserve evid
 No production credentials, certificate issuance, Atlas mutation, relay actuation, eFuse programming or OTA deployment was performed during software validation.
 
 
+
+
+## Session-capable firmware rollout (not yet hardware commissioned)
+
+Deploy the companion gateway and broker ACLs first. Subscribe tools/# and shops/#;
+permit activity/checkins/+/+ and activity/checkends/+/+ publications. Test owner
+logoff, double-scan kick, RM/board/admin kick eligibility, unrelated-card cancellation,
+and 15-second timeout. Check the original owner and kicker in MongoDB checkend.
+During an outage flag change the running relay must stay on; after ending, a new
+start must fail. Power-cycle offline to verify the red latch and unknown-time
+recovery event. Confirm two independent tool/shop flags clear only with API data.
+Verify no duplicate stored events after reconnect/PUBACK loss. Test journal/flash
+write failures and LCD absence with a dummy load before attaching equipment.
+Public wiki instructions must remain a draft until this rollout is commissioned.

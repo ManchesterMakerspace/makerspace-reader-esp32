@@ -238,6 +238,8 @@ bool saveState() {
       o["id"] = c.id;
       o["member"] = c.member;
       o["holder"] = c.holder;
+      o["firstName"] = c.firstName; o["lastInitial"] = c.lastInitial;
+      o["managesTool"] = c.managesTool;
       o["status"] = c.status;
       o["expiry"] = c.expiry;
       o["key"] = c.key;
@@ -300,6 +302,8 @@ void loadState() {
     c.id = o["id"] | "";
     c.member = o["member"] | "";
     c.holder = o["holder"] | "";
+    c.firstName = o["firstName"] | ""; c.lastInitial = o["lastInitial"] | "";
+    c.managesTool = o["managesTool"] | false;
     c.status = o["status"] | "";
     c.expiry = o["expiry"] | int64_t(0);
     c.key = o["key"] | "";

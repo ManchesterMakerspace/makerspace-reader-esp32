@@ -10,7 +10,9 @@ struct Frame {
 };
 struct Status {
   bool net = false, api = false, mqtt = false, trusted = false;
-  bool relay = false, tool = false;
+  bool relay = false, tool = false, outOfService = false, kickPending = false, haveLast = false;
+  char userName[65] = {}, lastName[70] = {};
+  int64_t lastEnded = 0;
   int64_t utcMs = 0, relayDeadlineMs = 0, relayStartedMs = 0;
 };
 enum class Reason { other, unknown, revoked, expired, checkoutExpired };

@@ -10,7 +10,8 @@ constexpr uint8_t RELAY_PIN = 21;
 struct Card {
   String uid, id, member, holder, status, key, digest;
   int64_t expiry = 0, first = 0;
-  bool pending = false;
+  bool pending = false, managesTool = false;
+  String firstName, lastInitial;
   int64_t observedUs = 0;
   uint32_t refreshedAt = 0, sourceSequence = 0;
 };
@@ -75,3 +76,15 @@ inline bool checkNvsWrite(const char *key, size_t written, size_t expected) {
   storageOK = false;
   return false;
 }
+// Session transitions require stateMutex; persistence service runs outside it.
+bool toolScan(const Card &, int64_t until, String &reason);
+void endToolSession(const char *reason = "automatic", const Card *actor = nullptr);
+void recoverToolSession();
+void serviceToolSession();
+bool toolOutOfService();
+void updateToolStatus(JsonVariantConst);
+namespace display { struct Status; }
+void toolDisplayStatus(display::Status &);
+
+void cancelToolConfirmation(const String &uid = "");
+void reserveEventSpace(size_t incoming);

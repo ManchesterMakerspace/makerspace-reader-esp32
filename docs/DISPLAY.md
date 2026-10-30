@@ -61,3 +61,19 @@ Physical acceptance remains to be performed on a board:
 - [ ] NET, DB, MQ, NTP individually and together, then recovery in priority order.
 - [ ] Winter/summer and DST boundaries using a controlled trusted-time source; RTC/authorization stay UTC.
 - [ ] Measure all four pulse durations during greetings/warnings and network outages. Verify fresh scan resets, expiry removes countdown, tool elapsed clock survives grant refresh and clears on OFF.
+
+
+## Tool session screens
+
+Active tools show User is <FIRSTNAME> / Scan to log off using full-width rows.
+A pending kick shows Scan same card / again to kick <FIRSTNAME> in blue.
+Long rows scroll at 300 ms per character, with one-second endpoint pauses.
+Completed sessions alternate the idle screen and last-use screen every 24 seconds
+(to accommodate long names): Last used at HH:MM / FIRSTNAME LAST_INITIAL.
+At 24 elapsed hours the date is MM/DD/YY. Times use New York DST rules; unknown
+reboot end times display Last used: ?. Last-use information survives reboot.
+Out-of-service always forces red and alternates row 2 every three seconds with
+OUT OF SERVICE, including while a session or kick prompt is active.
+
+Bench acceptance: verify logoff, two-scan kicks, power-loss recovery, scrolling,
+LCD absence, outage while running, offline reboot and service restoration.

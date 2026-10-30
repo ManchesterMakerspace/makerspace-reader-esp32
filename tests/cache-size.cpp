@@ -12,6 +12,9 @@ int main() {
     o["id"] = std::string(24, 'a');
     o["member"] = std::string(24, 'b');
     o["holder"] = std::string(256, 'h');
+    o["firstName"] = std::string(64, 'f');
+    o["lastInitial"] = std::string(4, 'l');
+    o["managesTool"] = true;
     o["status"] = std::string(64, 's');
     o["expiry"] = INT64_MAX;
     o["key"] = std::string(12, 'a');
@@ -29,6 +32,11 @@ int main() {
   d["config"]["name"] = std::string(48, 'n');
   d["config"]["toolName"] = std::string(96, 't');
   d["config"]["role"] = "tool";
+  d["config"]["shopName"] = std::string(96, 's');
+  d["config"]["shopId"] = std::string(24, 'a');
+  d["config"]["toolId"] = std::string(24, 'b');
+  d["config"]["toolOutOfService"] = true;
+  d["config"]["shopOutOfService"] = true;
   size_t size = measureMsgPack(d);
   assert(size < 320 * 1024);
   std::cout << "300 maximum-size cards + 150 grants: " << size << " MessagePack bytes\n";

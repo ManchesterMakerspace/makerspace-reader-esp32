@@ -36,7 +36,7 @@ Both transports authenticate sector 1 with Key A, read the credential and traile
 
 ## Cache choice
 
-RAM unordered_maps provide UID-to-key/expiry/card and member-to-tool-grant lookups. Maximums are 300 cards and 150 grants. The maximum-size fixture uses **179,308 bytes** of MessagePack; realistic shorter names use less. LittleFS snapshots avoid SQLite overhead and hundreds of separately allocated flash files. NVS holds counters, small configuration markers and the generated 32-byte device cache key.
+RAM unordered_maps provide UID-to-key/expiry/card and member-to-tool-grant lookups. Maximums are 300 cards and 150 grants. The maximum-size fixture uses **211,315 bytes** of MessagePack; realistic shorter names use less. LittleFS snapshots avoid SQLite overhead and hundreds of separately allocated flash files. NVS holds counters, small configuration markers and the generated 32-byte device cache key.
 
 Each snapshot contains configuration, cards, FirstScan, and grants. AES-256-GCM uses a unique device cache key, a nonce reserved durably in NVS before encryption, and the pathname as associated data. The next snapshot is written via a temporary file to the inactive generation, read back and authenticated, then selected with a durable NVS generation counter. At startup only that committed generation is loaded; a corrupted current snapshot never silently rolls back revoked permissions.
 
@@ -50,7 +50,7 @@ This is crash-consistent application storage, not protection against physical re
 
 An unmounted filesystem can be formatted only when READER_FORMAT_NEW_FS is enabled, the reader namespace has no entries, and the entire LittleFS partition reads as erased (0xFF) flash. A mount failure on non-erased storage is not permission to format. Existing files without a valid nonzero NVS nonce counter fail initialization even with a compiled key. Used/corrupt stores are not automatically formatted. Keys and caches are not exposed in the management UI.
 
-Five-minute HTTPS refresh and MQTT hints keep the RAM maps current. Cache misses or stale entries perform an authoritative lookup. A verified unknown card replaces its cached permission; duplicate UID/capacity errors fail instead of delivering a truncated authoritative inventory. During transport outages, previously cached permission remains usable until expiry. Unobserved revocations cannot take effect offline.
+Fifteen-minute HTTPS refresh and MQTT hints keep the RAM maps current. Cache misses or stale entries perform an authoritative lookup. READER_REFRESH_INTERVAL_MS is a compile-time override shared by periodic snapshots and card-cache freshness; it defaults to 900000 milliseconds (15 minutes). MQTT-triggered refreshes retain their existing retry/debounce behavior. A verified unknown card replaces its cached permission; duplicate UID/capacity errors fail instead of delivering a truncated authoritative inventory. During transport outages, previously cached permission remains usable until expiry. Unobserved revocations cannot take effect offline.
 
 FirstScan is station-local UTC epoch milliseconds, initially 0. A physical presentation, even a rejection, records it once; API/MQTT payloads never overwrite it. With no trustworthy time, pending=true distinguishes an observed card from never scanned. If trusted time arrives in the same boot, elapsed monotonic time reconstructs the first observation. If that boot ends first, the original timestamp remains unknown (0/pending), rather than inventing an epoch. Tombstones preserve observations for removed cards while space remains within the 300-entry bound.
 
@@ -58,11 +58,11 @@ FirstScan is station-local UTC epoch milliseconds, initially 0. A physical prese
 
 A valid battery-backed PCF8523 seeds trusted UTC at startup. Otherwise NTP provides only enough approximate time to validate TLS; HTTPS serverTime establishes authorization time. Once trusted, authorization advances from a monotonic timer, independent of NTP wall-clock changes. NTP is stopped after HTTPS confirmation. A cold boot without RTC or API time denies admission.
 
-Both card validity and current member status must be activeMember. Effective expiry is the earlier of card and membership expiry. Tools additionally require an available tool/shop and a current, non-revoked, non-superseded checkout. Checkout dates expire at the start of the next day in America/New_York, including DST; null means non-expiring, bounded by card expiry.
+Both card validity and current member status must be activeMember. Effective expiry is the earlier of card and membership expiry. Starting a tool additionally requires an available tool/shop and a current, non-revoked, non-superseded checkout. An out-of-service flag alone does not revoke a running session. Checkout dates expire at the start of the next day in America/New_York, including DST; null means non-expiring, bounded by card expiry.
 
 ## Audit spool and MQTT
 
-One immutable event is created for the final scan decision. No replay can operate the relay. A persisted sequence plus device identity generates a stable 12-byte ObjectId; filenames include a padded sequence for oldest-first eviction. HTTP inserts are idempotent; a conflicting reuse of an ID is rejected.
+Pulse-reader scans create one immutable decision event. Tool sessions create a checkin on start and a checkend on termination; a pending kick confirmation creates neither. No replay can operate the relay. A persisted sequence plus device identity generates a stable 12-byte ObjectId; filenames include a padded sequence for oldest-first eviction. HTTP inserts are idempotent; a conflicting reuse of an ID is rejected.
 
 Each encrypted LittleFS event has independent dbAck and mqttAck flags. Successful checkins require Mongo acknowledgment and MQTT QoS 1 PUBACK before removal. Rejections require Mongo acknowledgment only. Delivery is at least once: a lost acknowledgment can produce a duplicate MQTT message, so consumers deduplicate on _id. A database rejection never discards the record. Retries rotate through queued events so one permanently rejected record does not block later records.
 
@@ -83,3 +83,33 @@ The relay must be off before OTA or configuration changes. Uploads hold maintena
 Sources: [Arduino as an IDF component](https://docs.espressif.com/projects/arduino-esp32/en/latest/esp-idf_component.html), [ESP32-S3 secure boot](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/security/secure-boot-v2.html), and the pinned vendor source under vendor/libraries.
 
 
+
+## Tool sessions (gateway and firmware upgrade)
+
+Tool readers maintain one owner and require a second presentation within 15 seconds
+for another eligible member to kick that owner. Eligible kickers have a current tool
+checkout, manage its shop, or hold board/admin status; every card still requires
+active, unexpired membership and credential verification. Kicking only logs off.
+Tool starts remain subject to a checkout and tool/shop availability.
+
+Encrypted /tool-session stores immutable start/end identities and routing context.
+Relay shutdown precedes asynchronous end persistence. A boot never restores power;
+an unfinished journal produces a reboot checkend with unknown end time (0), unless
+an end was already persisted. Storage failure blocks new starts until resolved;
+physical power loss and flash failure can still prevent exact timing/audit recovery.
+
+The checkend collection mirrors checkins and adds checkinId, kicked, kickedBy
+(memberId, uid, holder), and an end reason. Tool context includes memberId, shopId,
+toolId, shopName and toolName as strings. Stable _id values make replay idempotent.
+Tool MQTT topics are activity/checkins/<SHOP>/<TOOL> and
+activity/checkends/<SHOP>/<TOOL>; percent, slash, plus and hash are percent-escaped.
+Both deliveries require Mongo acknowledgment and MQTT PUBACK. Non-tool topics stay
+activity/checkins. The session preserves names even when the catalog is renamed.
+
+Tool and shop out-of-service flags are independently persisted in NVS, scoped by ID.
+They block starts without interrupting an active session. A true MQTT hint latches
+immediately; false hints request an authoritative snapshot before clearing. Gateway
+snapshots retain current grants during an outage and distinguish enabled from
+available. Subscribe to tools/# and shops/# in addition to existing topics. Deploy
+the gateway and broker ACL changes before this firmware. Earlier gateway responses
+without enabled deny tool starts. No environment variables are added.

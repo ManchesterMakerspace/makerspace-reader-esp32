@@ -62,7 +62,7 @@ The PN7160 configuration assumes the module's normal VDD(UP)=3.3 V / VANT=5 V su
 | garagedoor | HIGH for 30 seconds |
 | test | HIGH for 9 seconds |
 | latch | HIGH for 5 seconds |
-| tool | Toggle on each authorized presentation; OFF on expiry or verified invalidation |
+| tool | Owner scan starts/ends a session; another eligible user confirms a kick with a second scan; OFF on expiry or verified invalidation |
 
 Remove a card for at least 500 ms before the same card triggers another action. Each relay activation arms ESP32 Arduino's bundled Ticker with a fresh one-shot countdown. The callback posts an off event; a separate high-priority task checks the current deadline and switches the relay under the same state lock used by scans. Resetting a pulse replaces its countdown, and a delayed old callback cannot stop the new pulse. Deadline polling remains a fallback, so network timeouts do not extend pulses. Tool relays start OFF after every boot. A physical emergency stop and machine safety circuits remain independent of this access controller.
 
@@ -102,7 +102,7 @@ Readers hold read keys for cached cards and must be trusted devices. Production 
 ./scripts/build.ps1
 ```
 
-The host cache fixture measures 179,308 bytes for 300 maximum-size cards and 150 grants, below the 320 KiB per-snapshot limit. These tests and compilation do not validate RF behavior, actual relay timing, power-loss recovery, or signed production OTA. Record those results using docs/COMMISSIONING.md.
+The host cache fixture measures 211,315 bytes for 300 maximum-size cards and 150 grants, below the 320 KiB per-snapshot limit. These tests and compilation do not validate RF behavior, actual relay timing, power-loss recovery, or signed production OTA. Record those results using docs/COMMISSIONING.md.
 
 Companion ts-data-api setup and contracts are in its READER_API.md. Deploy the API and indexes before configuring readers. The wiki draft under docs/wiki is held until the system is commissioned and released.
 

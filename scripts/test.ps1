@@ -26,6 +26,10 @@ try {
  if($LASTEXITCODE -ne 0){throw 'Display backend test compilation failed'}
  & ./.test-build/display-backend-tests.exe
  if($LASTEXITCODE -ne 0){throw 'Display backend tests failed'}
+ & g++ -std=c++11 -Wall -Wextra -Werror tests/tool-session.cpp -o .test-build/tool-session-tests.exe
+ if($LASTEXITCODE -ne 0){throw 'Tool session test compilation failed'}
+ & ./.test-build/tool-session-tests.exe
+ if($LASTEXITCODE -ne 0){throw 'Tool session tests failed'}
  # Compile the production relay implementation with hardware/state test doubles.
  Copy-Item MakerspaceReader/Relay.cpp .test-build/Relay.cpp -Force
  & g++ -std=c++11 -Wall -Wextra -Werror -I tests/relay-fakes tests/relay.cpp .test-build/Relay.cpp -o .test-build/relay-tests.exe
