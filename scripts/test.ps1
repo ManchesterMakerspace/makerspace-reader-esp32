@@ -30,6 +30,11 @@ try {
  if($LASTEXITCODE -ne 0){throw 'Tool session test compilation failed'}
  & ./.test-build/tool-session-tests.exe
  if($LASTEXITCODE -ne 0){throw 'Tool session tests failed'}
+ Copy-Item MakerspaceReader/ToolSessionService.cpp .test-build/ToolSessionService.cpp -Force
+ & g++ -std=c++11 -Wall -Wextra -Werror -I tests/session-fakes -I MakerspaceReader -I .arduino/libraries/ArduinoJson/src tests/session-service.cpp MakerspaceReader/Display.cpp -o .test-build/session-service-tests.exe
+ if($LASTEXITCODE -ne 0){throw 'Session service test compilation failed'}
+ & ./.test-build/session-service-tests.exe
+ if($LASTEXITCODE -ne 0){throw 'Session service tests failed'}
  # Compile the production relay implementation with hardware/state test doubles.
  Copy-Item MakerspaceReader/Relay.cpp .test-build/Relay.cpp -Force
  & g++ -std=c++11 -Wall -Wextra -Werror -I tests/relay-fakes tests/relay.cpp .test-build/Relay.cpp -o .test-build/relay-tests.exe
@@ -40,7 +45,8 @@ try {
  if($LASTEXITCODE -ne 0){throw 'Policy test compilation failed'}
  & ./.test-build/policy-tests.exe
  if($LASTEXITCODE -ne 0){throw 'Policy tests failed'}
- & g++ -std=c++11 -Wall -Wextra -Werror -I tests/fakes tests/nfc.cpp MakerspaceReader/Pn532.cpp -o .test-build/nfc-tests.exe
+ Copy-Item tests/fakes/wire.h .test-build/Wire.h -Force
+ & g++ -std=c++11 -Wall -Wextra -Werror -I .test-build -I tests/fakes tests/nfc.cpp MakerspaceReader/Pn532.cpp -o .test-build/nfc-tests.exe
  if($LASTEXITCODE -ne 0){throw 'NFC test compilation failed'}
  & ./.test-build/nfc-tests.exe
  if($LASTEXITCODE -ne 0){throw 'NFC tests failed'}

@@ -13,11 +13,11 @@ static void armRelayTimer() {
     relayOffEvent = true;
   });
 }
-void stopRelay() {
-  endToolSession();
+void stopRelay(const char *reason, const Card *actor) {
   relayTicker.detach();
   relayOffEvent = false;
   digitalWrite(RELAY_PIN, LOW);
+  endToolSession(reason, actor);
   relayOn = false;
   relayDeadline = 0;
   toolDeadline = 0;
@@ -44,8 +44,7 @@ void recheckActiveTool() {
   String reason;
   int64_t until = 0;
   if (c == cards.end() || !authorize(c->second, reason, until)) {
-    endToolSession(c == cards.end() ? "cardRemoved" : reason.c_str());
-    stopRelay();
+    stopRelay(c == cards.end() ? "cardRemoved" : reason.c_str());
     return;
   }
   if (until != toolDeadline) {
@@ -63,11 +62,11 @@ void serviceRelay() {
   // Recheck the current deadline rather than letting that event stop a new run.
   bool offEvent = relayOffEvent.exchange(false);
   if (offEvent && relayOn && esp_timer_get_time() >= relayDeadline) {
-    endToolSession("expired"); stopRelay();
+    stopRelay("expired");
   }
   // Independent deadline guard also handles trusted-clock advances.
   if (relayOn && (maintenance || deviceBlocked || !clockTrusted ||
                   relayDeadline <= 0 || esp_timer_get_time() >= relayDeadline ||
                   (toolDeadline > 0 && epochMs() >= toolDeadline)))
-    stopRelay();
+    stopRelay(maintenance ? "maintenance" : deviceBlocked ? "readerBlocked" : !clockTrusted ? "timeUnavailable" : "expired");
 }

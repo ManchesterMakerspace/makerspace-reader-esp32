@@ -22,6 +22,7 @@ static std::unordered_map<int, uint32_t> inFlightAt;
 static std::atomic<bool> mqttStarted(false);
 bool api(const String &path, JsonDocument &response, const String &body) {
   Lock l(apiMutex);
+  const uint32_t statusRevision=toolStatusRevision.load();
   if (!String(API_URL).startsWith("https://") || !ETH.hasIP() || epochMs() < 1700000000000LL) {
     log_e("MongoDB API %s unavailable: HTTPS=%d, Ethernet IP=%d, TLS clock ready=%d",
           path.c_str(), String(API_URL).startsWith("https://"), ETH.hasIP(),
@@ -60,8 +61,10 @@ bool api(const String &path, JsonDocument &response, const String &body) {
     }
   }
   static uint32_t responseSequence = 0;
-  if (ok)
+  if (ok) {
     response["_sequence"] = ++responseSequence;
+    response["_statusRevision"] = statusRevision;
+  }
   http.end();
   apiOK = ok;
   if (code == 401 || code == 403 || code == 409) {
@@ -144,7 +147,7 @@ static void refresh() {
     String oldTool = configuration["toolId"] | "", oldRole = configuration["role"] | "";
     configuration.set(result["config"]);
     configuration.remove("serverTime");
-    updateToolStatus(result["tool"]);
+    updateToolStatus(result["tool"], result["_statusRevision"]);
     configuration["toolName"] = result["tool"]["name"] | "";
     if (prefs.getBool("enrollOff", false))
       configuration["enrollmentEnabled"] = false;
@@ -327,6 +330,7 @@ static void mqttEvent(void *, esp_event_base_t, int32_t id, void *data) {
       log_e("MQTT subscribe failed: cards/#");
     if (esp_mqtt_client_subscribe(mqtt, "readers/all/invalidate", 1) < 0)
       log_e("MQTT subscribe failed: readers/all/invalidate");
+    esp_mqtt_client_subscribe(mqtt, "readers/all/refresh", 1);
     esp_mqtt_client_subscribe(mqtt, "tools/#", 1);
     esp_mqtt_client_subscribe(mqtt, "shops/#", 1);
     refreshNeeded = true;
@@ -373,16 +377,13 @@ static void mqttEvent(void *, esp_event_base_t, int32_t id, void *data) {
         String id = doc["_id"].is<JsonObject>() ? String(doc["_id"]["$oid"] | "") : String(doc["_id"] | "");
         bool shop = mqttTopic.startsWith("shops/");
         if (id == String(configuration[shop ? "shopId" : "toolId"] | "")) {
-          if (doc["out_of_service"] == true) {
-            configuration[shop ? "shopOutOfService" : "toolOutOfService"] = true;
-            checkNvsWrite(shop ? "shopOosId" : "toolOosId", prefs.putString(shop ? "shopOosId" : "toolOosId", id), id.length());
-            checkNvsWrite(shop ? "shopOos" : "toolOos", prefs.putBool(shop ? "shopOos" : "toolOos", true), 1);
-          }
+          if (doc["out_of_service"] == true) latchToolOutage(shop,id);
           refreshNeeded = true;
         }
       }
       return;
     }
+    if (mqttTopic == "readers/all/refresh") { refreshNeeded=true; return; }
     if (mqttTopic == "readers/all/invalidate") {
       refreshNeeded = true;
       Lock s(stateMutex);

@@ -21,9 +21,9 @@ extern String activeUid;
 int64_t epochMs();
 bool authorize(const Card &, String &, int64_t &);
 inline void digitalWrite(int, int level) { assert(stateHeld); gpio = level; }
-void stopRelay();
+void stopRelay(const char *reason = "automatic", const Card *actor = nullptr);
 void startRelay(int64_t, int64_t, const String &);
 void recheckActiveTool();
 void serviceRelay();
 
-inline void endToolSession(const char * = "automatic") {}
+inline void endToolSession(const char * = "automatic", const Card * = nullptr) { assert(gpio == LOW); }

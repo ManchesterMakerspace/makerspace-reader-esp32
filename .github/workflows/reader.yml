@@ -1,0 +1,20 @@
+name: Reader validation
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  firmware-and-host-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+      - name: Install pinned Arduino dependencies
+        shell: pwsh
+        run: ./scripts/setup.ps1 -ArduinoData (Join-Path $HOME '.arduino15')
+      - name: Host tests including production session fault injection
+        shell: pwsh
+        run: ./scripts/test.ps1
+      - name: Compile ESP32 firmware using placeholder bench configuration
+        shell: pwsh
+        run: ./scripts/build.ps1

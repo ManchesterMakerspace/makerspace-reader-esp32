@@ -73,3 +73,18 @@ The sketch now includes MakerspacePN7160.h from the bundled, patched ELECHOUSE 3
 - Hardware relay, power-loss interruption, broker reconnect/PUBACK loss and LCD
   timing scenarios are not bench-verified; follow COMMISSIONING.md before rollout.
 - Clean ESP32-S3 firmware build passed: 1,128,936 bytes flash (26% of 4 MiB application slot), 36,268 bytes static RAM (11%). ArduinoJson 7.4.3 and the pinned patched vendor dependencies are restored locally.
+
+
+## Recovery review regression suite
+
+scripts/test.ps1 now compiles production ToolSessionService.cpp with fake flash,
+NVS, time and relay adapters. It exercises end commit failures, repeated reboot,
+replayed acknowledgments, malformed journals, outage persistence, stale HTTP
+responses, independent shop/tool flags and failed NVS writes. Relay tests assert
+that the GPIO is LOW before the audit callback. The GitHub Actions reader.yml
+workflow runs this complete host suite and the firmware build on Ubuntu for every
+push and pull request. Linux Wire.h casing is supplied explicitly by the runner.
+
+Review validation: full firmware host suite passed, including production-service power-cut and NVS tests; gateway TypeScript build and concurrency regressions passed. Both workflow YAML files parse on Linux. Hosted GitHub jobs have been configured but have not been run from this local checkout.
+
+Final review checks: firmware host suite and expanded production-service fault-injection tests passed; gateway build and all 26 suites / 97 tests passed; final ESP32 build passed (1,132,244 bytes flash, 36,276 bytes static RAM). Hardware power-cut and relay/LCD commissioning remains separate from the simulated fault tests.

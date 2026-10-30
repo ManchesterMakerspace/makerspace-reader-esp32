@@ -243,7 +243,7 @@ static void scan(const String &uid, bool classic) {
     String text;
     serializeJson(request, text);
     if (api("/reader/v1/cards/lookup", response, text)) {
-      { Lock s(stateMutex); if (response["tool"].is<JsonObject>() && response["_sequence"].as<uint32_t>() >= configurationSequence) { updateToolStatus(response["tool"]); configurationSequence = response["_sequence"]; } }
+      { Lock s(stateMutex); if (response["tool"].is<JsonObject>() && response["_sequence"].as<uint32_t>() >= configurationSequence) { updateToolStatus(response["tool"], response["_statusRevision"]); configurationSequence = response["_sequence"]; } }
       card.refreshedAt = millis() + 1;
       card.sourceSequence = response["_sequence"];
       JsonObject o = response["document"];
