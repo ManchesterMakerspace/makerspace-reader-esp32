@@ -45,6 +45,17 @@ static int64_t days(int y, unsigned m, unsigned d) {
   unsigned doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
   return int64_t(era) * 146097 + yo * 365 + yo / 4 - yo / 100 + doy - 719468;
 }
+static void clockText(int64_t minutes, char (&out)[6]) {
+  // Always write exactly HH:MM and a terminator; saturate elapsed time at 99:59.
+  unsigned value = unsigned(std::max<int64_t>(0, std::min<int64_t>(minutes, 5999)));
+  unsigned hours = value / 60;
+  out[0] = char('0' + hours / 10);
+  out[1] = char('0' + hours % 10);
+  out[2] = ':';
+  out[3] = char('0' + (value % 60) / 10);
+  out[4] = char('0' + value % 10);
+  out[5] = '\0';
+}
 void newYorkClock(int64_t utcMs, char (&out)[6]) {
   time_t seconds = time_t(utcMs / 1000);
   tm utc = {};
@@ -61,7 +72,7 @@ void newYorkClock(int64_t utcMs, char (&out)[6]) {
   int offset = seconds >= spring && seconds < fall ? -4 : -5;
   int64_t minute = (int64_t(seconds) / 60 + offset * 60) % 1440;
   if (minute < 0) minute += 1440;
-  std::snprintf(out, sizeof(out), "%02d:%02d", int(minute / 60), int(minute % 60));
+  clockText(minute, out);
 }
 static void pad(char *out, unsigned width, const char *text) {
   std::memset(out, ' ', width);
@@ -184,8 +195,7 @@ Frame Model::frame(const Status &s, int64_t now) {
   char clock[6] = "     ";
   if (s.relay && s.tool) {
     int64_t minutes = std::max<int64_t>(0, now - s.relayStartedMs) / 60000;
-    minutes = std::min<int64_t>(minutes, 5999);  // Saturate at 99:59, never wrap.
-    std::snprintf(clock, sizeof(clock), "%02d:%02d", int(minutes / 60), int(minutes % 60));
+    clockText(minutes, clock);
   } else if (s.relay && s.relayDeadlineMs > now) {
     int seconds = int(std::min<int64_t>(9999, (s.relayDeadlineMs - now + 999) / 1000));
     std::snprintf(clock, sizeof(clock), "%4ds", seconds);

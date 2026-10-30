@@ -216,6 +216,25 @@ int main() {
   };
   for (auto t : times) { newYorkClock(t.utc, clock); assert(std::string(clock) == t.expected); }
 
+  // Every clock value must fit the five-character field, including midnight.
+  for (int minute = 0; minute < 1440; ++minute) {
+    newYorkClock(1782878400000LL + int64_t(minute) * 60000, clock);
+    auto hourText = std::to_string(minute / 60);
+    auto minuteText = std::to_string(minute % 60);
+    if (hourText.size() == 1) hourText = "0" + hourText;
+    if (minuteText.size() == 1) minuteText = "0" + minuteText;
+    assert(std::string(clock) == hourText + ":" + minuteText);
+  }
+  // Enrollment leaves the tool timer visible: verify hour rollover and saturation.
+  Model timer;
+  Presentation enrolling; enrolling.id = 1; enrolling.enrollment = Enrollment::running;
+  timer.accept(enrolling, 0);
+  auto timed = healthy(); timed.tool = timed.relay = true; timed.relayStartedMs = 120000;
+  const TimeCase elapsed[] = {{-1, "00:00"}, {0, "00:00"}, {1, "00:01"},
+                              {59, "00:59"}, {60, "01:00"}, {5999, "99:59"}, {6000, "99:59"}};
+  for (auto t : elapsed)
+    screen(timer, timed, timed.relayStartedMs + t.utc * 60000, "Enrolling", "Keep holding", amber, t.expected);
+
   FakeBackend backend;
   Presenter presenter;
   Frame f = start.frame(s, 20000);
