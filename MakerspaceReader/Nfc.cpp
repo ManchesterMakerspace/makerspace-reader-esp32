@@ -275,7 +275,7 @@ static void scan(const String &uid, bool classic) {
     enrollment = configuration["enrollmentEnabled"] | false;
   }
   if (classic && !card.id.isEmpty() && card.key.isEmpty() && enrollment && !maintenance &&
-      !deviceBlocked) {
+      !deviceBlocked && !cacheCapacityExceeded) {
     bool enrolled = display::enrollWithFeedback(presentation, [&card]() { return enroll(card); });
     if (!enrolled)
       log_e("NFC enrollment failed; card was not authorized");
@@ -304,9 +304,7 @@ static void scan(const String &uid, bool classic) {
         uint64_t newest=0; for(const auto &p:cards) newest=std::max(newest,p.second.lastUsed);
         card.lastUsed = newest == UINT64_MAX ? newest : newest+1;
       }
-      if (readerProfile::compact || cards.count(uid.c_str()) || cards.size() < readerProfile::cards)
-        cards[uid.c_str()] = card;
-      trimCardCache();
+      cacheScannedCard(card);
       recheckActiveTool();
     }
     saveState();

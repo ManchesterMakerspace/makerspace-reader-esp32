@@ -154,3 +154,71 @@ creation order cannot be recovered. They retain their IDs and acknowledgment sta
 and are conservatively drained/evicted before sequenced records. Legacy journals
 receive keys before replay; existing legacy spool files are not renamed because
 the encrypted file's pathname is authenticated data.
+
+## Compact layout update for Wi-Fi
+
+The 4 MB profile now has two 1.625 MiB (0x1a0000) application slots and 700 KiB
+of LittleFS. App0 starts at 0x10000, app1 at 0x1b0000, LittleFS at 0x350000,
+and the encrypted-NVS key partition remains at 0x3ff000. This retains the 10%
+image-headroom requirement while fitting the optional Wi-Fi stack. The 8 MB and
+16 MB layouts are unchanged. Compact snapshots, card/grant limits and the 64 KiB
+event spool budget are unchanged; space remains for three maximum snapshots,
+the spool, journals and filesystem overhead.
+
+Changing from the earlier 1.5 MiB-slot / 956 KiB-filesystem layout requires a
+factory reflash that installs the partition table and initializes the new filesystem.
+Ordinary OTA does not migrate partitions, and startup validation
+rejects the old layout. Drain queued events and back up needed configuration and
+cache material before changing the partition table. No automatic filesystem
+migration or formatting was added.
+
+## Optional Wi-Fi fallback
+
+Define both WIFI_SSID and WIFI_PSK in secrets.h to enable station-only Wi-Fi
+fallback. Without them, the radio is never started. Missing Ethernet hardware or
+link starts fallback immediately; a linked Ethernet interface gets 30 seconds
+for DHCP. Failed initialization, DHCP and Wi-Fi connection attempts retry every
+30 seconds without delaying the relay worker. Ethernet remains enabled during
+Wi-Fi use. Ethernet DHCP retries preserve the shared DNS settings used by Wi-Fi.
+Once Ethernet has link and an IP and is selected as the default route,
+Wi-Fi disconnects and enters WIFI_OFF. Connection handoffs request a refresh;
+HTTPS/MQTT keep their existing TLS verification and retry behavior.
+
+The boot entropy source is disabled before enabling RF and restored after the
+radio is off. Wi-Fi credentials are not logged or persisted by the Wi-Fi library.
+Statistics report the active address/transport, radio state and whether manual
+provisioning is available. Display network health accepts either interface.
+
+/config (including /config/... aliases) and the reserved /provision*, /api/local/provision*, /recovery* and
+/api/local/recovery* routes require Ethernet with Wi-Fi fully off, and the HTTP
+connection's local address must be the Ethernet address. This also rejects an
+old Wi-Fi connection during handoff. The broader credential-provisioning UI is
+still unfinished; these restrictions guard its reserved paths as well as current
+configuration. Read-only statistics and the existing OTA service remain available
+on Wi-Fi. Manual HTTP provisioning requires the trusted wired management LAN.
+
+Host tests exercise missing hardware, no link, DHCP timeout, Wi-Fi retries,
+Ethernet recovery, stale addresses, timer wrap and provisioning denial. CI builds
+all three flash profiles both with and without optional Wi-Fi definitions.
+Physical Ethernet/DHCP recovery, radio-off current draw and Wi-Fi transport tests
+remain hardware commissioning checks.
+
+Bench commissioning sequence:
+
+1. With Ethernet unplugged, verify a Wi-Fi IP, gateway access and MQTT reconnect.
+   Repeat with Ethernet linked but DHCP unavailable for more than 30 seconds.
+2. Restore Ethernet link while withholding DHCP; verify Wi-Fi remains usable.
+   Restore DHCP and verify transport becomes ethernet, wifiRadioActive becomes
+   false, and radio current drops. Repeat cable removal and restoration.
+3. During Wi-Fi use, attempt both GET and POST /config and confirm HTTP 403.
+   Retry through Ethernet after the radio is off and confirm normal authentication
+   and CSRF checks still apply.
+4. Repeat a handoff during a tool session and queued-event delivery; verify the
+   relay/session is unchanged and delivery resumes through the existing retry path.
+5. Build without either Wi-Fi definition and confirm Ethernet-only operation.
+
+### Recoverable cache capacity failures
+
+Compact scoped refreshes request the retained ordinary cards and active owner; the gateway always includes the eligible privileged set. A lookup that completes after the request UID list is captured retains both its unrequested card and its grant. Requested-card removals and newer authoritative grants still take precedence, and grants never carry across a tool/role change.
+
+Cache capacity failures are reported separately as `cacheCapacityExceeded` in Statistics JSON and do not enter OTA maintenance mode. Synchronization continues so correcting the eligible set at the gateway can restore operation. New admissions are denied while this error is set; an otherwise valid active owner can still log off and a valid privileged card can still kick. Saves exceeding profile card, grant or serialized-byte limits leave the previous snapshot and generation intact. The error clears after a fitting authoritative snapshot has been written and read back successfully; ordinary scan saves cannot clear it.

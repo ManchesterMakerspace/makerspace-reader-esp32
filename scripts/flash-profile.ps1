@@ -3,7 +3,7 @@ function Get-ReaderFlashProfile([string]$Capacity) {
  $configured = [long]$Matches[1]
  if ($configured -lt 4 -or $configured -gt 1024) { throw 'Unsupported flash capacity' }
  $size = if ($configured -ge 16) {16} elseif ($configured -ge 8) {8} else {4}
- $slot = if ($size -eq 16) {0x400000} elseif ($size -eq 8) {0x200000} else {0x180000}
+ $slot = if ($size -eq 16) {0x400000} elseif ($size -eq 8) {0x200000} else {0x1a0000}
  $start = 0x10000 + 2 * $slot
  $keys = if ($size -eq 16) {0xc10000} else {$size * 1MB - 0x1000}
  $cache = if ($size -eq 16) {0x400000} else {$keys - $start}

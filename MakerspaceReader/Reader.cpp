@@ -1,3 +1,4 @@
+#include "Connectivity.h"
 #include "BuildInfo.h"
 #include "Reader.h"
 #include "Display.h"
@@ -16,44 +17,6 @@
 #include <esp_secure_boot.h>
 #include <esp_timer.h>
 static bool pendingBootValidation = false;
-static bool ethernetStarted = false;
-static uint32_t ethernetStartedAt = 0;
-static void checkEthernet() {
-  static uint32_t lastCheck = 0, linkedAt = 0;
-  static bool wasLinked = false, hadIP = false, linkReported = false, ipReported = false;
-  uint32_t now = millis();
-  if (!ethernetStarted || now - lastCheck < 1000)
-    return;
-  lastCheck = now;
-  bool linked = ETH.linkUp(), hasIP = ETH.hasIP();
-  if (!linked) {
-    if (wasLinked || (!linkReported && now - ethernetStartedAt >= 30000)) {
-      log_e("Ethernet link down; check W5500, cable and switch");
-      linkReported = true;
-    }
-    ipReported = false;
-  } else {
-    if (!wasLinked) {
-      log_i("Ethernet link up; waiting for IP address");
-      linkedAt = now;
-      linkReported = false;
-      ipReported = false;
-    }
-    if (hasIP && !hadIP)
-      log_i("Ethernet acquired IP: %s", ETH.localIP().toString().c_str());
-    if (!hasIP && hadIP) {
-      log_e("Ethernet lost IP address");
-      linkedAt = now;
-      ipReported = false;
-    }
-    if (!hasIP && !ipReported && now - linkedAt >= 30000) {
-      log_e("Ethernet failed to acquire an IP address within 30 seconds; check DHCP");
-      ipReported = true;
-    }
-  }
-  wasLinked = linked;
-  hadIP = linked && hasIP;
-}
 SemaphoreHandle_t stateMutex, fsMutex, i2cMutex, apiMutex, snapshotMutex;
 std::unordered_map<std::string, Card> cards;
 std::unordered_map<std::string, Grant> grants;
@@ -113,6 +76,10 @@ bool authorize(const Card &c, String &reason, int64_t &until) {
       return true;
     }
   }
+  if (cacheCapacityExceeded) {
+    reason = "cacheCapacityExceeded";
+    return false;
+  }
   if (!running && String(configuration["role"] | "") == "tool" && toolOutOfService()) {
     reason = "outOfService"; return false;
   }
@@ -141,7 +108,7 @@ void readerSetup() {
   i2cMutex = xSemaphoreCreateMutex();
   apiMutex = xSemaphoreCreateMutex();
   snapshotMutex = xSemaphoreCreateMutex();
-  // Ethernet-only firmware: enable the internal entropy source (ADC is not used).
+  // Use the internal entropy source until RF starts; Connectivity manages handoff.
   bootloader_random_enable();
   uint8_t nonce[24];
   esp_fill_random(nonce, sizeof(nonce));
@@ -177,10 +144,7 @@ void readerSetup() {
     }
   }
   SPI.begin(13, 12, 11);
-  ethernetStartedAt = millis();
-  ethernetStarted = ETH.begin(ETH_PHY_W5500, 1, 14, 10, 9, SPI);
-  if (!ethernetStarted)
-    log_e("Ethernet W5500 initialization failed");
+  connectivitySetup();
   if (!clockTrusted)
     configTime(0, 0, "pool.ntp.org",
                "time.cloudflare.com"); // bootstrap TLS only; API confirms authorization time
@@ -210,7 +174,7 @@ void readerSetup() {
 }
 extern void otaWatchdog();
 void readerLoop() {
-  checkEthernet();
+  serviceConnectivity();
   if (cacheKeyReady) serviceToolSession();
 #if CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
   if (pendingBootValidation && millis() > 30000 && productionReady && storageOK && nfcOK) {

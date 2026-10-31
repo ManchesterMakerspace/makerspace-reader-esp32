@@ -2,6 +2,9 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '../scripts/flash-profile.ps1')
 foreach ($case in @(@('4MB',4),@('8MB',8),@('12MB',8),@('16MB',16),@('32MB',16))) {
  $p=Get-ReaderFlashProfile $case[0]
+ $expectedSlot = if ($p.ProfileMB -eq 4) {0x1a0000} elseif ($p.ProfileMB -eq 8) {0x200000} else {0x400000}
+ if ($p.SlotBytes -ne $expectedSlot -or $p.SlotBytes % 65536) { throw 'Wrong or unaligned OTA slot size' }
+ if ($p.ProfileMB -eq 4 -and $p.CacheBytes -ne 700KB) { throw 'Compact LittleFS must be 700 KiB' }
  if ($p.ProfileMB -ne $case[1]) { throw "Wrong profile for $($case[0])" }
  if ($p.KeysOffset + 4096 -gt $p.ProfileMB * 1MB) { throw 'Partition overflow' }
  if ($p.CacheStart -ne 65536 + 2*$p.SlotBytes) { throw 'Slot overlap' }
@@ -18,4 +21,4 @@ $actual=(Get-ReaderPartitions (Get-ReaderFlashProfile '16MB')) -split "
 for ($i=1; $i -lt $expected.Count; $i++) {
  if ($expected[$i].Trim() -ne $actual[$i].Trim()) { throw '16MB layout changed' }
 }
-Write-Output 'Flash profile selection, bounds and existing 16MB layout passed'
+Write-Output 'Flash profiles, 1.625 MiB compact OTA slots, 700 KiB cache and existing 16MB layout passed'

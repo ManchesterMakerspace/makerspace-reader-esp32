@@ -1,3 +1,4 @@
+#include "Connectivity.h"
 #include "Display.h"
 #include "Reader.h"
 #include <ETH.h>
@@ -62,7 +63,7 @@ static void task(void *) {
       s.relayStartedMs = relayStartedUs / 1000;
       toolDisplayStatus(s);
       xSemaphoreGive(stateMutex);
-      s.net = ETH.linkUp() && ETH.hasIP();
+      s.net = networkHasIP();
       // No state or mailbox lock is held during backend I/O.
       presenter.render(*backend, model.frame(s, now));
     }
