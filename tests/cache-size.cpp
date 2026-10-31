@@ -40,5 +40,12 @@ int main() {
   d["config"]["shopOutOfService"] = true;
   size_t size = measureMsgPack(d);
   assert(size < readerProfile::snapshotBytes);
+  // Reserve both committed snapshots, an interrupted replacement, the event spool,
+  // and 64 KiB for journal/filesystem overhead even on the smaller Wi-Fi layout.
+  assert(readerProfile::cacheBytes >= 3 * readerProfile::snapshotBytes + readerProfile::eventBytes + 64 * 1024);
+  if (readerProfile::compact) {
+    assert(readerProfile::slotBytes == 0x1a0000);
+    assert(readerProfile::cacheOffset == 0x350000 && readerProfile::cacheBytes == 700 * 1024);
+  }
   std::cout << "Maximum-size profile cache: " << size << " MessagePack bytes\n";
 }

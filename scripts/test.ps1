@@ -4,9 +4,22 @@ Push-Location $readerRoot
 try {
  & (Join-Path $readerRoot 'tests/flash-profile.ps1')
  New-Item -ItemType Directory -Force .test-build | Out-Null
- Copy-Item MakerspaceReader/CachePolicy.cpp .test-build/CachePolicy.cpp -Force
+ & g++ -std=c++11 -Wall -Wextra -Werror tests/connectivity.cpp -o .test-build/connectivity-tests.exe
+ if ($LASTEXITCODE -ne 0) { throw 'Connectivity test compilation failed' }
+ & ./.test-build/connectivity-tests.exe
+ if ($LASTEXITCODE -ne 0) { throw 'Connectivity tests failed' }
+ Copy-Item MakerspaceReader/Connectivity.cpp .test-build/Connectivity.cpp -Force
+ foreach ($wifiOption in @('-DTEST_WIFI', '-DTEST_ETHERNET_ONLY')) {
+  & g++ -std=c++11 -Wall -Wextra -Werror -DREADER_PROFILE_MB=4 $wifiOption -I tests/connectivity-fakes -I MakerspaceReader tests/connectivity-service.cpp -o .test-build/connectivity-service.exe
+  if ($LASTEXITCODE -ne 0) { throw 'Connectivity service compilation failed' }
+  & ./.test-build/connectivity-service.exe
+  if ($LASTEXITCODE -ne 0) { throw 'Connectivity service tests failed' }
+ }
+ foreach ($cacheSource in @('CachePolicy','CacheRefresh','CacheSnapshot')) {
+  Copy-Item "MakerspaceReader/$cacheSource.cpp" ".test-build/$cacheSource.cpp" -Force
+ }
  foreach ($profileMB in @(4,8,16)) {
-  & g++ -std=c++11 -Wall -Wextra -Werror "-DREADER_PROFILE_MB=$profileMB" -I tests/cache-fakes -I MakerspaceReader tests/cache-policy.cpp .test-build/CachePolicy.cpp -o .test-build/cache-policy.exe
+  & g++ -std=c++11 -Wall -Wextra -Werror "-DREADER_PROFILE_MB=$profileMB" -I tests/cache-fakes -I MakerspaceReader -I .arduino/libraries/ArduinoJson/src tests/cache-policy.cpp .test-build/CachePolicy.cpp .test-build/CacheRefresh.cpp .test-build/CacheSnapshot.cpp -o .test-build/cache-policy.exe
   if ($LASTEXITCODE -ne 0) { throw 'Cache policy compilation failed' }
   & ./.test-build/cache-policy.exe
   if ($LASTEXITCODE -ne 0) { throw 'Cache policy tests failed' }

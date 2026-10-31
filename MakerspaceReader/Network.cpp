@@ -1,3 +1,4 @@
+#include "Connectivity.h"
 #include "FlashProfile.h"
 #include "secrets.h"
 #include "RefreshConfig.h"
@@ -25,9 +26,9 @@ static std::atomic<bool> mqttStarted(false);
 bool api(const String &path, JsonDocument &response, const String &body) {
   Lock l(apiMutex);
   const uint32_t statusRevision=toolStatusRevision.load();
-  if (!String(API_URL).startsWith("https://") || !ETH.hasIP() || epochMs() < 1700000000000LL) {
-    log_e("MongoDB API %s unavailable: HTTPS=%d, Ethernet IP=%d, TLS clock ready=%d",
-          path.c_str(), String(API_URL).startsWith("https://"), ETH.hasIP(),
+  if (!String(API_URL).startsWith("https://") || !networkHasIP() || epochMs() < 1700000000000LL) {
+    log_e("MongoDB API %s unavailable: HTTPS=%d, network IP=%d, TLS clock ready=%d",
+          path.c_str(), String(API_URL).startsWith("https://"), networkHasIP(),
           epochMs() >= 1700000000000LL);
     apiOK = false;
     return false;
@@ -46,11 +47,17 @@ bool api(const String &path, JsonDocument &response, const String &body) {
   }
   http.addHeader("Content-Type", "application/json");
   int code = body.length() ? http.POST(body) : http.GET();
-  bool ok = false;
+  bool ok = false, capacityFailure = false;
   if (code == 200 && http.getSize() >= 0 && http.getSize() <= 524288) {
     String raw = http.getString();
     if (raw.length() <= 524288)
       ok = !deserializeJson(response, raw);
+  }
+  if (code == 409 && http.getSize() >= 0 && http.getSize() <= 4096) {
+    JsonDocument error;
+    String raw = http.getString();
+    if (raw.length() <= 4096 && !deserializeJson(error, raw))
+      capacityFailure = cacheCapacityResponse(path, code, error.as<JsonVariantConst>());
   }
   if (ok && ((path == "/reader/v1/snapshot" || path == "/reader/v1/snapshot/recent") || path == "/reader/v1/config")) {
     String id = (path == "/reader/v1/snapshot" || path == "/reader/v1/snapshot/recent") ? String(response["config"]["id"] | "")
@@ -69,7 +76,7 @@ bool api(const String &path, JsonDocument &response, const String &body) {
   }
   http.end();
   apiOK = ok;
-  if (code == 401 || code == 403 || code == 409) {
+  if (code == 401 || code == 403 || (code == 409 && !capacityFailure)) {
     // A rejected event is retained; rejected reader authorization disables cached access.
     if ((path == "/reader/v1/snapshot" || path == "/reader/v1/snapshot/recent") || path == "/reader/v1/cards/lookup") {
       deviceBlocked = true;
@@ -81,7 +88,8 @@ bool api(const String &path, JsonDocument &response, const String &body) {
   if (!ok) {
     log_e("MongoDB API %s failed: HTTP/transport code=%d (200 means invalid response)", path.c_str(), code);
     Lock s(stateMutex);
-    lastError = "API " + String(code) + " " + path;
+    if (capacityFailure) failCacheCapacity();
+    else lastError = "API " + String(code) + " " + path;
   }
   return ok;
 }
@@ -125,7 +133,7 @@ static void refresh() {
   std::vector<std::string> requested;
   if (readerProfile::compact) {
     JsonDocument request; auto uids=request["uids"].to<JsonArray>();
-    { Lock s(stateMutex); for(const auto &p:cards) {uids.add(p.second.uid);requested.push_back(p.first);} }
+    { Lock s(stateMutex); requested=snapshotRequestedUids(); for(const auto &uid:requested) uids.add(uid.c_str()); }
     serializeJson(request,requestBody);
   }
   if (!api(readerProfile::compact ? "/reader/v1/snapshot/recent" : "/reader/v1/snapshot", result, requestBody)) {
@@ -138,6 +146,7 @@ static void refresh() {
   }
   if (result["cards"].size() > readerProfile::cards || result["grants"].size() > readerProfile::grants) {
     apiOK = false;
+    { Lock l(stateMutex); failCacheCapacity(); }
     log_e("MongoDB API snapshot exceeds cache capacity");
     return;
   }
@@ -162,73 +171,14 @@ static void refresh() {
       configuration["enrollmentEnabled"] = false;
     serializeJson(configuration, newState);
     changed = old != newState;
-    std::unordered_map<std::string, Card> next;
-    for (JsonObject o : result["cards"].as<JsonArray>()) {
-      Card c;
-      c.refreshedAt = millis() + 1;
-      c.sourceSequence = sequence;
-      c.uid = o["uid"] | "";
-      c.id = o["_id"] | "";
-      c.member = o["memberId"] | "";
-      c.holder = o["holder"] | "";
-      c.firstName = o["firstName"] | "";
-      c.lastInitial = o["lastInitial"] | "";
-      c.managesTool = o["managesTool"] | false;
-      c.status = o["validity"] | "unknown";
-      c.expiry = o["expiry"] | int64_t(0);
-      c.key = o["credential"]["keyA"] | "";
-      c.digest = o["credential"]["digest"] | "";
-      auto previous = cards.find(c.uid.c_str());
-      if (previous != cards.end()) {
-        if (previous->second.sourceSequence > sequence)
-          c = previous->second;
-        c.lastUsed = previous->second.lastUsed;
-        c.first = previous->second.first;
-        c.pending = previous->second.pending;
-        c.observedUs = previous->second.observedUs;
-        auto &p = previous->second;
-        changed |= p.managesTool != c.managesTool || p.firstName != c.firstName || p.lastInitial != c.lastInitial || p.id != c.id || p.holder != c.holder || p.status != c.status || p.expiry != c.expiry || p.key != c.key || p.digest != c.digest || p.member != c.member;
-      } else
-        changed = true;
-      next[c.uid.c_str()] = c;
-    }
-    // Keep only station observation tombstones when cards disappear.
-    for (auto &pair : cards)
-      if (!next.count(pair.first) && next.size() < readerProfile::cards && (pair.second.first || pair.second.pending)) {
-        Card c;
-        if (pair.second.sourceSequence > sequence || (readerProfile::compact && std::find(requested.begin(),requested.end(),pair.first)==requested.end()))
-          c = pair.second;
-        c.uid = pair.second.uid;
-        c.first = pair.second.first;
-        c.pending = pair.second.pending;
-        c.observedUs = pair.second.observedUs;
-        changed |= !pair.second.id.isEmpty();
-        next[pair.first] = c;
-      }
-    changed |= next.size() != cards.size();
-    cards.swap(next);
-    std::unordered_map<std::string, Grant> ng;
-    for (JsonObject o : result["grants"].as<JsonArray>()) {
-      Grant g;
-      g.sourceSequence = sequence;
-      g.member = o["memberId"] | "";
-      g.id = o["checkoutId"] | "";
-      g.until = o["until"] | int64_t(0);
-      auto p = grants.find(g.member.c_str());
-      changed |= p == grants.end() || p->second.id != g.id || p->second.until != g.until;
-      ng[g.member.c_str()] = g;
-    }
-    changed |= ng.size() != grants.size();
-    // A lookup completed after this snapshot request must not lose its grant.
-    for (const auto &p: grants) if (p.second.sourceSequence > sequence) ng[p.first]=p.second;
-    grants.swap(ng);
-    trimCardCache();
+    bool sameScope = oldTool == String(configuration["toolId"] | "") && oldRole == String(configuration["role"] | "");
+    changed |= mergeCacheSnapshot(result.as<JsonVariantConst>(), requested, sequence, sameScope);
     if (relayOn && toolDeadline > 0 && (oldTool != String(configuration["toolId"] | "") || oldRole != String(configuration["role"] | "")))
       stopRelay();
     recheckActiveTool();
   }
-  if (changed)
-    saveState();
+  if (changed || cacheCapacityExceeded)
+    saveState(true);
   lastRefresh = millis();
 }
 static bool eventFileLess(const String &a, const String &b) {
@@ -557,7 +507,7 @@ void networkTask(void *) {
   }
   uint32_t next = 0, backoff = 1000, lastMqttStart = 0;
   for (;;) {
-    if (ETH.hasIP() && epochMs() > 1700000000000LL) {
+    if (networkHasIP() && epochMs() > 1700000000000LL) {
       if (mqtt && !mqttStarted && (!lastMqttStart || millis() - lastMqttStart >= 5000)) {
         lastMqttStart = millis();
         esp_err_t rc = esp_mqtt_client_start(mqtt);

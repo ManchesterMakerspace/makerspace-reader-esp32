@@ -1,3 +1,5 @@
+#include "Connectivity.h"
+#include "ConnectivityPolicy.h"
 #include "BuildInfo.h"
 #include "Reader.h"
 #include "secrets.h"
@@ -85,6 +87,12 @@ void webSetup() {
   static_assert(sizeof(WEB_USERNAME) > 1 && sizeof(WEB_PASSWORD) > 16,
                 "Nonempty username and long password required");
   server.addMiddleware([](AsyncWebServerRequest *r, ArMiddlewareNext next) {
+    if (connectivity::provisioningPath(r->url().c_str()) &&
+        !connectivity::manualProvisioningAllowed(wifiRadioActive(), ETH.linkUp() && ETH.hasIP() && uint32_t(ETH.localIP()) != 0,
+          r->client() && r->client()->localIP() == ETH.localIP())) {
+      r->send(403,"text/plain","Manual provisioning requires Ethernet with Wi-Fi fully off");
+      return;
+    }
     if (!auth(r))
       return;
     if (r->url() == "/update") {
@@ -118,8 +126,11 @@ void webSetup() {
     d["uptimeSeconds"] = millis() / 1000;
     d["freeHeap"] = ESP.getFreeHeap();
     d["freePSRAM"] = ESP.getFreePsram();
-    d["ip"] = ETH.localIP().toString();
-    d["ethernet"] = ETH.hasIP();
+    d["ip"] = networkAddress();
+    d["networkTransport"] = networkTransport();
+    d["wifiRadioActive"] = wifiRadioActive();
+    d["manualProvisioningAllowed"] = !wifiRadioActive() && ETH.linkUp() && ETH.hasIP() && uint32_t(ETH.localIP()) != 0;
+    d["ethernet"] = ETH.linkUp() && ETH.hasIP() && uint32_t(ETH.localIP()) != 0;
     d["api"] = bool(apiOK);
     d["mqtt"] = bool(mqttOK);
     d["nfc"] = bool(nfcOK);
@@ -128,6 +139,7 @@ void webSetup() {
     d["relay"] = bool(relayOn);
     d["maintenance"] = bool(maintenance);
     d["storageHealthy"] = bool(storageOK);
+    d["cacheCapacityExceeded"] = bool(cacheCapacityExceeded);
     d["cacheKeyReady"] = cacheKeyReady;
     d["acceptedSinceBoot"] = uint32_t(accepted);
     d["rejectedSinceBoot"] = uint32_t(rejected);

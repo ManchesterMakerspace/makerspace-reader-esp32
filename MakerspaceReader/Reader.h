@@ -48,7 +48,7 @@ extern bool productionReady;
 bool api(const String &path, JsonDocument &response, const String &body = "");
 extern bool cacheKeyReady; // Set once before workers; never exposes key material.
 bool initializeStorage();
-bool saveState();
+bool saveState(bool authoritative = false);
 void loadState();
 void recoverStorage();
 bool sealWrite(const String &path, const String &data);
@@ -99,3 +99,13 @@ uint64_t reserveEventSequence();
 String eventSpoolPath(uint64_t sequence, const String &id);
 
 void trimCardCache();
+
+// Capacity failures are recoverable by refresh; they must never pause worker tasks.
+extern std::atomic<bool> cacheCapacityExceeded;
+extern uint32_t cacheCapacityRevision; // protected by stateMutex
+void failCacheCapacity(); // requires stateMutex
+std::vector<std::string> snapshotRequestedUids(); // requires stateMutex
+bool mergeCacheSnapshot(JsonVariantConst, const std::vector<std::string> &, uint32_t, bool sameScope);
+void cacheScannedCard(const Card &); // requires stateMutex
+
+bool cacheCapacityResponse(const String &, int, JsonVariantConst);

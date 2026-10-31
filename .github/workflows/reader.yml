@@ -10,13 +10,20 @@ jobs:
       fail-fast: false
       matrix:
         flash: [4, 8, 16]
+        wifi: [false, true]
     steps:
       - uses: actions/checkout@v4
       - uses: arduino/setup-arduino-cli@v2
       - name: Install pinned Arduino dependencies
         shell: pwsh
         run: ./scripts/setup.ps1 -ArduinoData (Join-Path $HOME '.arduino15')
-      - name: Host tests including production session fault injection
+      - name: Enable optional Wi-Fi compile coverage
+        if: matrix.wifi
+        shell: pwsh
+        run: |
+          Add-Content MakerspaceReader/secrets.h '#define WIFI_SSID "ci-unused-network"'
+          Add-Content MakerspaceReader/secrets.h '#define WIFI_PSK "ci-unused-password"'
+      - name: Host tests including cache races, recovery and session fault injection
         shell: pwsh
         run: ./scripts/test.ps1
       - name: Compile ESP32 firmware using placeholder bench configuration
