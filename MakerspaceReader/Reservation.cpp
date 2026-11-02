@@ -11,7 +11,7 @@ Record *Model::find(const std::string &id) {
   return nullptr;
 }
 void Model::setSession(const Session &next) {
-  if (next.id != session.id) { warnings.clear(); windowKey.clear(); newCues.clear(); firstSessionTick=true; }
+  if (next.id != session.id) { warnings.clear(); windowKey.clear(); newCues.clear(); firstSessionTick=true; deferredClaimAt=0; }
   session = next;
 }
 void Model::replace(std::vector<Record> next, bool all, int64_t now) {
@@ -61,7 +61,8 @@ Decision Model::tick(int64_t now) {
   // Retain the durable scan timestamp until complete inventory can evaluate it,
   // so a delayed loop or fetch cannot turn an arrival at +15 into a no-show.
   int64_t claimAt=firstSessionTick && session.started>0 && session.started<=now ? session.started : now;
-  if (complete) firstSessionTick=false;
+  if(deferredClaimAt>0) claimAt=deferredClaimAt;
+  if (complete) { firstSessionTick=false; deferredClaimAt=0; }
   d.cues.swap(newCues); d.newReservationCue = !d.cues.empty(); d.flash = d.newReservationCue;
   const Record *candidate = nullptr, *own = nullptr;
   for (const auto &r : records) {

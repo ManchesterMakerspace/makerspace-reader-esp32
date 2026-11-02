@@ -169,7 +169,7 @@ void serviceToolSession() {
   if (!spoolSessionEvent(copy["start"],copy["startSequence"],"checkins","activity/checkins/"+route) ||
       !spoolSessionEvent(copy["end"],copy["endSequence"],"checkend","activity/checkends/"+route)) return;
 #if READER_ENABLE_RESERVATIONS
-  { Lock s(stateMutex); if (!reservation::sessionEnded(copy["end"])) return; }
+  { Lock s(stateMutex); if (!reservation::sessionEnded(copy["end"],copy["start"]["time"] | int64_t(0))) return; }
 #endif
   copy["closed"]=true;
   if (!writeJournal(copy)) return;
@@ -228,6 +228,6 @@ void reservation::captureSession(reservation::Session &out) {
 bool reservation::attendanceReady() { return !pendingEnd && storageOK; }
 void reservation::recoverSessionEnd() {
   Lock s(stateMutex);
-  if(!journal["end"].isNull() && !reservation::sessionEnded(journal["end"])) pendingEnd=true;
+  if(!journal["end"].isNull() && !reservation::sessionEnded(journal["end"],journal["start"]["time"] | int64_t(0))) pendingEnd=true;
 }
 #endif

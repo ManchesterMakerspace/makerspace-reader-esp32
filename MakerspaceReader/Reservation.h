@@ -41,6 +41,7 @@ class Model {
   std::vector<Warning> warnings;
   std::string windowKey;
   bool baseline = false, firstSessionTick = true;
+  int64_t deferredClaimAt = 0;
   std::vector<Alarm> newCues;
   bool warn(const Record &, bool own, int64_t now);
 public:
@@ -51,6 +52,7 @@ public:
   void setSession(const Session &);
   void replace(std::vector<Record> next, bool all, int64_t now);
   Decision tick(int64_t now);
+  void retryClaim(int64_t observedAt) { deferredClaimAt=observedAt; }
   View view(int64_t now) const;
   Record *find(const std::string &id);
 };

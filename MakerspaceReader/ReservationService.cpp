@@ -10,6 +10,8 @@ namespace reservation {
 static Model model;
 static JsonDocument journal;
 static std::vector<Record> tracked;
+// Attendance must survive even when unresolved monitoring fills tracked.
+static std::vector<Record> associations;
 static std::vector<Alarm> warningTargets, cueTargets;
 static std::string alertSession;
 static std::vector<String> topics;
@@ -38,6 +40,8 @@ static bool save() { // stateMutex held; never performs network or I2C work.
   journal["lossBaseline"]=lossBaseline; journal["checkedAt"]=checkedAt; journal["eligible"]=eligible;
   auto rows=journal["tracked"].to<JsonArray>();
   for (const auto &r:tracked) encode(rows.add<JsonObject>(),r);
+  auto linked=journal["associations"].to<JsonArray>();
+  for (const auto &r:associations) encode(linked.add<JsonObject>(),r);
   String raw; serializeJson(journal,raw);
   if (raw.length()>65536 || !sealWrite(file,raw,false)) { uncertain=true; log_e("Reservation journal unavailable; attendance coverage uncertain"); return false; }
   return true;
@@ -49,13 +53,14 @@ void setup() {
   String raw;
   if (!sealRead(file,raw,false) || raw.length()>65536 || deserializeJson(journal,raw) ||
       journal["version"].as<int>()!=1 || journal["tracked"].size()>capacity || journal["operations"].size()>64 ||
-      journal["releases"].size()>capacity) {
+      journal["releases"].size()>capacity || journal["associations"].size()>capacity || journal["endings"].size()>capacity) {
     uncertain=true; journal.clear(); loaded=true; return;
   }
   scope=journal["scope"] | ""; coveredFrom=journal["coveredFrom"] | int64_t(0);
   uncertain=(journal["uncertain"] | false) || interrupted; eligible=journal["eligible"] | true;
   checkedAt=journal["checkedAt"] | int64_t(0); lossBaseline=journal["lossBaseline"] | uint32_t(0);
   for (auto row:journal["tracked"].as<JsonArray>()) { Record r; if(!decode(row,r)) uncertain=true; else tracked.push_back(r); }
+  for (auto row:journal["associations"].as<JsonArray>()) { Record r; if(!decode(row,r)) uncertain=true; else associations.push_back(r); }
   model.records=tracked; // The first authoritative inventory establishes a silent baseline.
   std::sort(model.records.begin(),model.records.end(),[](const Record &a,const Record &b){return a.start==b.start ? a.id<b.id : a.start<b.start;});
   loaded=true;
@@ -65,7 +70,19 @@ bool subscribing() { Lock s(stateMutex); return enabled && eligible; }
 std::vector<String> hintTopics() { Lock s(stateMutex); return enabled && eligible ? topics : std::vector<String>{}; }
 static Record *tracking(const std::string &id) {
   for(auto &r:tracked) if(r.id==id) return &r;
+  for(auto &r:associations) if(r.id==id) return &r;
   return nullptr;
+}
+static Record *attendanceRecord(const Record &r) {
+  if(auto *t=tracking(r.id)) return t;
+  if(associations.size()>=capacity) { uncertain=true; return nullptr; }
+  associations.push_back(r);
+  return &associations.back();
+}
+static bool awaitingEnd(const std::string &session) {
+  for(auto event:journal["endings"].as<JsonArray>())
+    if(session==String(event["checkinId"] | "").c_str()) return true;
+  return false;
 }
 static bool queue(JsonDocument &op) {
   String key; serializeJson(op,key);
@@ -82,15 +99,39 @@ static bool queue(JsonDocument &op) {
     }
     String previous; serializeJson(old,previous); if(previous==key) return save();
   }
-  if(operations.size()>=64) { uncertain=true; save(); return false; }
+  if(operations.size()>=64) { uncertain=true; return false; }
   operations.add(op.as<JsonVariantConst>());
-  return save();
+  if(save()) return true;
+  operations.remove(operations.size()-1);
+  return false;
 }
-bool sessionEnded(JsonVariantConst event) {
+static bool claim(Record &r,const Session &session,int64_t observedAt) {
+  bool existing=tracking(r.id)!=nullptr;
+  auto *t=attendanceRecord(r);
+  if(!t) return false; // Never upload a claim without its release association.
+  Record previous=*t;
+  t->arrived=observedAt; t->associatedSession=session.id;
+  JsonDocument op; op["kind"]="claim"; op["reservationId"]=r.id; op["revision"]=r.revision;
+  op["checkinId"]=session.id; op["observedAt"]=observedAt;
+  // Commit the operation and association together, before either can be ACKed.
+  if(!queue(op)) { if(existing) *t=previous; else associations.pop_back(); return false; }
+  r.arrived=op["observedAt"].as<int64_t>(); r.associatedSession=session.id;
+  hinted=true;
+  return true;
+}
+static bool associate(Record &r,const Session &session) {
+  bool existing=tracking(r.id)!=nullptr;
+  auto *t=attendanceRecord(r);
+  if(!t) return false;
+  auto previous=t->associatedSession; t->associatedSession=session.id;
+  if(!save()) { if(existing) t->associatedSession=previous; else associations.pop_back(); return false; }
+  r.associatedSession=session.id;
+  return true;
+}
+static bool releaseSession(JsonVariantConst event) {
   if(String(event["reason"] | "")!="logoff" || event["kicked"]==true) return true;
-  if(!loaded) return false;
   bool queued=true, matched=false;
-  for(auto &r:tracked) {
+  for(auto *records:{&tracked,&associations}) for(auto &r:*records) {
     if(!r.arrived || r.released || r.associatedSession!=String(event["checkinId"] | "").c_str() ||
         r.member!=String(event["memberId"] | "").c_str() || r.end<=(event["time"] | int64_t(0))) continue;
     matched=true;
@@ -102,6 +143,73 @@ bool sessionEnded(JsonVariantConst event) {
   if(!matched) return true;
   bool saved=save(); hinted=true;
   return queued && saved;
+}
+bool sessionEnded(JsonVariantConst event,int64_t started) {
+  if(!loaded) return false;
+  bool associated=false;
+  for(auto *records:{&tracked,&associations}) for(const auto &r:*records)
+    if(r.arrived && r.associatedSession==String(event["checkinId"] | "").c_str() &&
+        r.member==String(event["memberId"] | "").c_str()) associated=true;
+  if(!releaseSession(event)) return false;
+  if(associated || started<=0) return true;
+  // The tool journal can close immediately after this independent durable handoff.
+  // Keep the original interval and IDs; a new active session must not replace it.
+  auto endings=journal["endings"].is<JsonArray>() ? journal["endings"].as<JsonArray>() : journal["endings"].to<JsonArray>();
+  for(auto old:endings) if(old["_id"]==event["_id"]) return save();
+  if(endings.size()>=capacity) { uncertain=true; return false; }
+  auto pending=endings.add<JsonObject>();
+  for(const char *key:{"_id","checkinId","memberId","time","reason","kicked"}) pending[key]=event[key];
+  pending["started"]=started; pending["toolId"]=event["toolId"] | scope.c_str();
+  hinted=true;
+  if(save()) return true;
+  endings.remove(endings.size()-1);
+  return false;
+}
+static void evaluateEndings() {
+  if(!model.complete) return;
+  auto endings=journal["endings"].as<JsonArray>();
+  for(size_t i=0;i<endings.size();) {
+    JsonVariantConst event=endings[i];
+    if(String(event["toolId"] | "")!=scope) { ++i; continue; }
+    Session ended(event["checkinId"] | "",event["memberId"] | "",event["started"] | int64_t(0));
+    int64_t until=event["time"] | int64_t(0);
+    if(until<ended.started) until=ended.started; // Unknown reboot time proves only the check-in.
+    Model past; past.records=model.records; past.complete=true; past.setSession(ended);
+    for(const auto &r:tracked)
+      if(!past.find(r.id)) past.records.push_back(r);
+    std::sort(past.records.begin(),past.records.end(),[](const Record &a,const Record &b){return a.start==b.start ? a.id<b.id : a.start<b.start;});
+    // Replay the scan and each boundary at which a running session could qualify.
+    std::vector<int64_t> times{ended.started};
+    for(const auto &r:past.records) for(int64_t at:{r.start-hour,r.end})
+      if(at>ended.started && at<until) times.push_back(at);
+    std::sort(times.begin(),times.end());
+    bool done=true;
+    for(auto at:times) {
+      auto decision=past.tick(at);
+      if(!decision.claim.empty()) {
+        auto *r=past.find(decision.claim);
+        done=claim(*r,ended,decision.observedAt);
+        if(done) if(auto *live=model.find(r->id)) { live->arrived=r->arrived; live->associatedSession=ended.id; }
+        break;
+      }
+      // Centrally known attendance still needs this visit's logoff association.
+      auto own=std::find_if(past.records.begin(),past.records.end(),[&](const Record &r){
+        return r.arrived && !r.released && r.member==ended.member && at>=r.start-hour && at<r.end;
+      });
+      if(own!=past.records.end()) {
+        done=associate(*own,ended);
+        if(done) if(auto *live=model.find(own->id)) live->associatedSession=ended.id;
+        break;
+      }
+    }
+    if(done) done=releaseSession(event);
+    // Preserve chronological association ownership while an earlier handoff retries.
+    if(!done) return;
+    // Queue writes above retain this ending until both claim and release are safe.
+    JsonDocument retained; retained.set(endings);
+    endings.remove(i);
+    if(!save()) { journal["endings"].set(retained.as<JsonVariantConst>()); return; }
+  }
 }
 void service() {
   if(!loaded) return;
@@ -126,6 +234,7 @@ void service() {
     audio::cancelReservation(); warningTargets.clear(); cueTargets.clear(); alertSession=current.id;
   }
   if(!sessionChanged && evaluatedThrough && now-evaluatedThrough<500) return;
+  evaluateEndings();
   auto prune=[&](std::vector<Alarm> &targets,audio::MelodyId melody) {
     bool had=!targets.empty();
     targets.erase(std::remove_if(targets.begin(),targets.end(),[&](const Alarm &a){
@@ -139,19 +248,11 @@ void service() {
   auto decision=model.tick(now);
   if(!decision.claim.empty()) {
     auto *r=model.find(decision.claim);
-    JsonDocument op; op["kind"]="claim"; op["reservationId"]=r->id; op["revision"]=r->revision;
-    op["checkinId"]=current.id; op["observedAt"]=decision.observedAt;
-    if(queue(op)) {
-      r->arrived=op["observedAt"].as<int64_t>(); r->associatedSession=current.id;
-      if(auto *t=tracking(r->id)) { t->arrived=r->arrived; t->associatedSession=current.id; }
-      save(); hinted=true;
-    }
+    if(!claim(*r,current,decision.observedAt)) model.retryClaim(decision.observedAt);
   }
   for(auto &r:model.records) {
-    if(!current.id.empty() && r.arrived && !r.released && r.member==current.member && now>=r.start-hour && now<r.end && r.associatedSession!=current.id) {
-      r.associatedSession=current.id;
-      if(auto *t=tracking(r.id)) t->associatedSession=current.id;
-      save();
+    if(!current.id.empty() && r.arrived && !r.released && r.member==current.member && now>=r.start-hour && now<r.end && r.associatedSession!=current.id && !awaitingEnd(r.associatedSession)) {
+      associate(r,current);
     }
   }
   if(current.id.empty()) audio::cancelReservation();
@@ -172,7 +273,7 @@ void displayStatus(display::Status &s) {
 }
 void stats(JsonObject out) {
   out["enabled"]=enabled.load(); out["reservable"]=eligible; out["complete"]=model.complete;
-  out["coverageUncertain"]=uncertain; out["pending"]=journal["operations"].size()+journal["releases"].size();
+  out["coverageUncertain"]=uncertain; out["pending"]=journal["operations"].size()+journal["releases"].size()+journal["endings"].size();
   out["cached"]=model.records.size(); out["tracked"]=tracked.size(); out["lastCheckedAt"]=checkedAt;
 }
 static bool sync(JsonDocument &request,JsonDocument &response,bool capable) {
@@ -195,7 +296,7 @@ void network() {
   static uint32_t lastAttempt=0;
   if(!loaded || !clockTrusted || (lastAttempt && mono-lastAttempt<1000) || (int32_t(mono-nextNetwork)<0 && !hinted)) return;
   bool capable; String currentScope; int64_t since, checked; bool reservable, pending, haveTracked;
-  { Lock s(stateMutex); capable=enabled; currentScope=scope; since=coveredFrom; checked=checkedAt; reservable=eligible; pending=journal["operations"].size()>0 || journal["releases"].size()>0; haveTracked=!tracked.empty(); }
+  { Lock s(stateMutex); capable=enabled; currentScope=scope; since=coveredFrom; checked=checkedAt; reservable=eligible; pending=journal["operations"].size()>0 || journal["releases"].size()>0 || journal["endings"].size()>0; haveTracked=!tracked.empty(); }
   if(!capable && !pending) return;
   if(capable && !reservable && !pending && !haveTracked && checked && epochMs()-checked<86400000) { hinted=false; return; }
   lastAttempt=mono;
@@ -233,14 +334,19 @@ void network() {
       Lock s(stateMutex);
       if(scope!=currentScope) return;
       eligible=reservable; topics=std::move(hints); checkedAt=epochMs(); model.replace(std::move(rows),all,checkedAt);
-      for(const auto &r:model.records) {
+      for(auto &r:model.records) {
         auto *t=tracking(r.id);
-        if(t) *t=r;
+        if(t) {
+          if(t->revision==r.revision) {
+            r.arrived=std::max(r.arrived,t->arrived); r.released=t->released; r.associatedSession=t->associatedSession;
+          }
+          *t=r;
+        }
         else if(tracked.size()<capacity) tracked.push_back(r);
         else uncertain=true;
       }
       if(!all) log_e("Reservation inventory exceeds 64 records; coverage suspended");
-      save(); fetched=mono;
+      save(); evaluateEndings(); fetched=mono;
     }
   }
   // At most four durable operations per pass; a rejected item cannot starve others.
@@ -284,7 +390,7 @@ void network() {
     {
       Lock s(stateMutex);
       auto ops=request["operations"].to<JsonArray>();
-      bool drained=journal["operations"].size()==0 && journal["releases"].size()==0 && checkpointThrough && model.complete && eventsDrained && attendanceReady();
+      bool drained=journal["operations"].size()==0 && journal["releases"].size()==0 && journal["endings"].size()==0 && checkpointThrough && model.complete && eventsDrained && attendanceReady();
       for(size_t examined=0;examined<tracked.size() && ops.size()<16;++examined) {
         trackedCursor%=tracked.size(); auto &r=tracked[trackedCursor++];
         if(r.monitored && (r.arrived || epochMs()<=r.start+grace || !drained)) continue;
@@ -324,10 +430,13 @@ void network() {
   uint32_t wait=ok ? 60000 : retryMs;
   if(ok) {
     Lock s(stateMutex);
-    if(!journal["operations"].size() && !journal["releases"].size()) {
+    if(!journal["operations"].size() && !journal["releases"].size() && !journal["endings"].size()) {
       auto before=tracked.size();
       tracked.erase(std::remove_if(tracked.begin(),tracked.end(),[](const Record &r){return (r.arrived || !r.monitored) && r.end<=epochMs();}),tracked.end());
       if(before!=tracked.size()) save();
+      before=associations.size();
+      associations.erase(std::remove_if(associations.begin(),associations.end(),[](const Record &r){return r.released || !r.arrived || r.end<=epochMs();}),associations.end());
+      if(before!=associations.size()) save();
     } else wait=1000;
     for(const auto &r:tracked) {
       if(!r.monitored && r.start+grace>=epochMs()) wait=1000;

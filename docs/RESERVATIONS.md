@@ -72,6 +72,13 @@ operations plus 64 pending releases. Releases have a separate durable queue so a
 full attendance backlog cannot lose a voluntary logoff or block a new tool session.
 The session ending remains open for retry if its release cannot be saved; after
 the handoff, releases survive subsequent check-ins and reboot independently.
+Up to 64 ended visits awaiting complete inventory retain their original check-in,
+ending and time interval in the same journal, independently of the active session.
+They are evaluated before new attendance and coverage checkpoints. A separate
+64-record association reserve preserves logoff links when unresolved monitoring
+fills the tracked-booking limit; a claim and its association commit together.
+If either reserve or durable storage is exhausted, work remains retryable instead
+of acknowledging a lost handoff. The journal retains its 64 KiB size limit.
 API acknowledgment precedes removal; replay is idempotent. Journal capacity/read
 failures mark reservation coverage uncertain without changing tool authorization.
 Changing tool/role starts a new coverage interval and preserves any existing loss

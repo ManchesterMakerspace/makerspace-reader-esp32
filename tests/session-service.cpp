@@ -34,7 +34,8 @@ void stopRelay(const char *reason,const Card *actor){powered=false;endToolSessio
 namespace reservation {
 bool acceptEnding=true;
 std::vector<std::string> endingAttempts;
-bool sessionEnded(JsonVariantConst event) {
+bool sessionEnded(JsonVariantConst event,int64_t started) {
+  assert(started>0);
   String raw;serializeJson(event,raw);endingAttempts.push_back(raw);
   return acceptEnding;
 }
