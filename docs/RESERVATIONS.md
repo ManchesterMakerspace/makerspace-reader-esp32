@@ -21,6 +21,13 @@ CI covers all flash sizes with/without reservations and optional Wi-Fi.
 Disabled builds also inspect the linked ELF and reject reservation services,
 playback functions, or score symbols; every build enforces 10% OTA headroom.
 
+The 4 MB build script enables C++ link-time optimization (`-flto`, with `-Os`
+at link time) to fit Wi-Fi and reservations together. C sources keep the core's
+normal settings because its panic-handler assembly cannot use LTO. The 8/16 MB
+compiler settings, all features, and partition layouts are unchanged. Generate
+compact images with `scripts/build.ps1`; it checks the actual application `.bin`
+size and prints the remaining headroom and exact byte budget.
+
 Deploy Rails reservation lifecycle support first, then ts-data-api, the required
 indexes and MQTT ACLs, then the portal and firmware. Configure the API's
 `READER_RAILS_URL` and the same >=32-character `READER_RESERVATION_SERVICE_SECRET`
@@ -108,7 +115,9 @@ booking through the portal instead of clearing coverage records to force release
 - The held wiki patch passed `git apply --check` against the retrieved wiki pages.
   No production data, deployment, firmware flashing or wiki publication was performed.
 
-Firmware matrix (application `.bin` bytes, excluding bootloader/partition images):
+Initial Ethernet-only firmware measurements, before the compact LTO fix
+(application `.bin` bytes, excluding bootloader/partition images). These did not
+cover the Wi-Fi plus reservations combination that subsequently failed CI:
 
 | Flash | Reservations | Application bytes | OTA slot bytes | Headroom |
 | --- | --- | ---: | ---: | ---: |
@@ -122,6 +131,26 @@ Firmware matrix (application `.bin` bytes, excluding bootloader/partition images
 All disabled ELFs passed the reservation-service, MQTT-state and melody symbol
 checks. The final scope-coverage adjustment is entirely inside the feature guard;
 preprocessing confirms that translation unit remains empty in disabled builds.
+
+### Compact CI build fix (2026-11-02)
+
+The 4 MB + Wi-Fi + reservations CI variant exceeded the 1,533,542-byte budget.
+C++ LTO now preserves every feature while fitting the existing 1,703,936-byte
+slot; the 10% requirement is unchanged. Validation uses Linux, the pinned core
+3.3.12/libraries, and CI's placeholder Wi-Fi credentials:
+
+| 4 MB transport | Reservations | Application bytes | Headroom |
+| --- | --- | ---: | ---: |
+| Ethernet + Wi-Fi fallback | enabled | 1,461,472 | 14.23% |
+| Ethernet + Wi-Fi fallback | disabled | 1,423,472 | 16.46% |
+| Ethernet only | enabled | 1,108,432 | 34.95% |
+| Ethernet only | disabled | 1,070,608 | 37.17% |
+
+The full Linux host suite also passed with `-Os -flto`. Its session-service test
+now compiles both translation units with reservations disabled, avoiding
+inconsistent display structure definitions. Firmware builds retain the disabled
+reservation symbol check. Physical boot, NFC/audio/display concurrency, network
+handoff and OTA checks remain part of hardware acceptance below.
 
 ## Hardware acceptance (required before rollout)
 

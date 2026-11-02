@@ -175,6 +175,12 @@ rejects the old layout. Drain queued events and back up needed configuration and
 cache material before changing the partition table. No automatic filesystem
 migration or formatting was added.
 
+The 4 MB build script also enables C++ link-time optimization to keep combined
+Wi-Fi/reservation builds below 90% of each existing application slot. C sources
+retain the core's normal compilation settings because the panic-handler assembly
+does not support LTO. This compiler change requires no partition migration and
+does not disable features. The 8/16 MB build settings are unchanged.
+
 ## Optional Wi-Fi fallback
 
 Define both WIFI_SSID and WIFI_PSK in secrets.h to enable station-only Wi-Fi

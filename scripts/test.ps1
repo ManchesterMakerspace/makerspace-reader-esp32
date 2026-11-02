@@ -75,7 +75,7 @@ try {
  if($LASTEXITCODE -ne 0){throw 'Tool session tests failed'}
  Copy-Item MakerspaceReader/EventSpool.cpp .test-build/EventSpool.cpp -Force
  Copy-Item MakerspaceReader/ToolSessionService.cpp .test-build/ToolSessionService.cpp -Force
- & g++ -std=c++11 -Wall -Wextra -Werror -I tests/session-fakes -I MakerspaceReader -I .arduino/libraries/ArduinoJson/src tests/session-service.cpp MakerspaceReader/Display.cpp -o .test-build/session-service-tests.exe
+ & g++ -std=c++11 -Wall -Wextra -Werror -DREADER_ENABLE_RESERVATIONS=0 -I tests/session-fakes -I MakerspaceReader -I .arduino/libraries/ArduinoJson/src tests/session-service.cpp MakerspaceReader/Display.cpp -o .test-build/session-service-tests.exe
  if($LASTEXITCODE -ne 0){throw 'Session service test compilation failed'}
  & ./.test-build/session-service-tests.exe
  if($LASTEXITCODE -ne 0){throw 'Session service tests failed'}
