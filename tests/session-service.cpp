@@ -30,11 +30,43 @@ void startRelay(int64_t,int64_t,const String &){powered=true;}
 void stopRelay(const char *reason,const Card *actor){powered=false;endToolSession(reason,actor);}
 #include "../.test-build/EventSpool.cpp"
 #include "../.test-build/ToolSessionService.cpp"
+#if READER_ENABLE_RESERVATIONS
+namespace reservation {
+bool acceptEnding=true;
+std::vector<std::string> endingAttempts;
+bool sessionEnded(JsonVariantConst event) {
+  String raw;serializeJson(event,raw);endingAttempts.push_back(raw);
+  return acceptEnding;
+}
+}
+#endif
 void boot(){session=toolsession::State{};journal.clear();pendingEnd=false;haveLast=false;activeName="";powered=false;maintenance=false;clockTrusted=false;statusDurable=true;toolStatusRevision=0;restoreToolStatus();recoverToolSession();clockTrusted=true;}
 void setup(){eventCapacity=1000;flash.clear();prefs.values.clear();prefs.fail=false;writes=failWrite=0;configuration.clear();configuration["role"]="tool";configuration["toolId"]="bbbbbbbbbbbbbbbbbbbbbbbb";configuration["shopId"]="cccccccccccccccccccccccc";configuration["toolName"]="Saw";configuration["shopName"]="Wood";configuration["toolAvailable"]=true;configuration["toolOutOfService"]=false;configuration["shopOutOfService"]=false;boot();statusDurable=true;toolStatusRevision=0;}
 Card owner(){Card c;c.uid="00112233";c.member="dddddddddddddddddddddddd";c.holder="Ada L";c.firstName="Ada";c.lastInitial="L";grants[c.member].until=epochMs()+100000;return c;}
 JsonDocument status(bool tool,bool shop){JsonDocument d;d["enabled"]=true;d["name"]="Saw";d["shopId"]="cccccccccccccccccccccccc";d["shopName"]="Wood";d["toolOutOfService"]=tool;d["shopOutOfService"]=shop;return d;}
 int main(){
+#if READER_ENABLE_RESERVATIONS
+  // Failed reservation handoff retains the end for retry, including across boot.
+  setup();auto releaseOwner=owner();String releaseReason;
+  assert(toolScan(releaseOwner,epochMs()+100000,releaseReason));
+  assert(toolScan(releaseOwner,epochMs()+100000,releaseReason));
+  reservation::acceptEnding=false;serviceToolSession();
+  assert(pendingEnd && !(journal["closed"] | false) && !powered);
+  assert(!reservation::attendanceReady());
+  auto retainedEnding=reservation::endingAttempts.back();
+  boot();reservation::recoverSessionEnd();serviceToolSession();
+  assert(pendingEnd && reservation::endingAttempts.back()==retainedEnding);
+  reservation::acceptEnding=true;serviceToolSession();
+  assert(!pendingEnd && journal["closed"]==true && reservation::attendanceReady());
+  assert(reservation::endingAttempts.back()==retainedEnding);
+  // Once the release has its own durable record, a new session can overwrite this journal.
+  assert(toolScan(releaseOwner,epochMs()+100000,releaseReason) && powered);
+  assert(journal["end"].isNull());
+  // A legacy closed ending whose replay fails is made retryable again.
+  assert(toolScan(releaseOwner,epochMs()+100000,releaseReason));serviceToolSession();
+  boot();reservation::acceptEnding=false;reservation::recoverSessionEnd();
+  assert(pendingEnd);reservation::acceptEnding=true;serviceToolSession();assert(!pendingEnd);
+#endif
   // Shared production allocator interleaves rejection and session records.
   setup();auto orderingOwner=owner();String orderingReason;
   assert(toolScan(orderingOwner,epochMs()+100000,orderingReason));

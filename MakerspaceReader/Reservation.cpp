@@ -58,21 +58,18 @@ bool Model::warn(const Record &r, bool own, int64_t now) {
 Decision Model::tick(int64_t now) {
   Decision d;
   if (now <= 0 || session.id.empty()) return d;
-  // Use the durable scan timestamp on the first evaluation, so a delayed loop
-  // cannot turn an arrival exactly at +15 minutes into a no-show.
+  // Retain the durable scan timestamp until complete inventory can evaluate it,
+  // so a delayed loop or fetch cannot turn an arrival at +15 into a no-show.
   int64_t claimAt=firstSessionTick && session.started>0 && session.started<=now ? session.started : now;
-  firstSessionTick=false;
+  if (complete) firstSessionTick=false;
   d.cues.swap(newCues); d.newReservationCue = !d.cues.empty(); d.flash = d.newReservationCue;
-  const Record *current = nullptr, *next = nullptr, *own = nullptr;
+  const Record *candidate = nullptr, *own = nullptr;
   for (const auto &r : records) {
     if (visible(r,now) && r.arrived && r.member == session.member && now >= r.start - hour) { if (!own) own=&r; }
-    if (!visible(r,claimAt)) continue;
-    if (r.start <= claimAt && !current) current=&r;
-    if (r.start > claimAt && !next) next=&r;
+    if (!candidate && visible(r,claimAt) && r.member == session.member &&
+        claimAt >= r.start - hour && claimAt <= r.start + grace && now < r.end) candidate=&r;
   }
-  const Record *candidate = current ? current : next;
-  if (!own && complete && candidate && candidate->member == session.member &&
-      claimAt >= candidate->start - hour && claimAt <= candidate->start + grace && now<candidate->end) {
+  if (!own && complete && candidate) {
     bool otherActive = std::any_of(records.begin(),records.end(),[&](const Record &r) {
       return !r.released && r.end>claimAt && r.id != candidate->id && r.start <= claimAt;
     });

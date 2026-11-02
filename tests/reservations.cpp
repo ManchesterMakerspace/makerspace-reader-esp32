@@ -62,5 +62,35 @@ int main() {
   m.setSession({"boundary","owner",start+grace});
   auto boundary=m.tick(start+grace+1000);
   assert(boundary.claim=="a" && boundary.observedAt==start+grace);
+  // A future booking by another member does not block an eligible owner booking.
+  m.reset(); m.setSession({"early","owner",9*hour});
+  auto earlier=booking("earlier","other",9*hour+grace);
+  earlier.end=9*hour+2*grace;
+  m.replace({booking("owner","owner",9*hour+3*grace),earlier},true,9*hour);
+  auto early=m.tick(9*hour);
+  assert(early.claim=="owner" && early.observedAt==9*hour);
+  assert(m.tick(earlier.start).claim.empty()); // Once active, the conflict still blocks.
+  assert(m.tick(earlier.end).claim=="owner");
+  // Initial fetch and partial inventory must not consume the scan timestamp.
+  for (bool partial : {false,true}) {
+    m.reset(); m.setSession({"deferred","owner",start+grace});
+    if (partial) m.replace({booking()},false,start+grace);
+    assert(m.tick(start+grace).claim.empty());
+    assert(m.tick(start+grace+500).claim.empty());
+    m.replace({booking()},true,start+grace+1000);
+    auto deferred=m.tick(start+grace+1000);
+    assert(deferred.claim=="a" && deferred.observedAt==start+grace);
+  }
+  // Deferred evaluation still respects arrival-time conflicts and reservation end.
+  m.reset(); m.setSession({"conflict","owner",start+grace});
+  assert(m.tick(start+grace).claim.empty());
+  auto conflict=booking("conflict","other",start);
+  conflict.end=start+grace+500;
+  m.replace({booking(),conflict},true,start+grace+1000);
+  assert(m.tick(start+grace+1000).claim.empty());
+  m.reset(); m.setSession({"expired","owner",start+grace});
+  assert(m.tick(start+grace).claim.empty());
+  m.replace({booking()},true,start+hour);
+  assert(m.tick(start+hour).claim.empty());
   std::cout << "Reservation boundaries, ownership, warnings, deduplication and incomplete inventory passed\n";
 }

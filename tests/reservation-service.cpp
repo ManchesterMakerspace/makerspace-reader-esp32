@@ -66,12 +66,57 @@ int main(){
   assert(journal["operations"].size()==1 && tracked[0].arrived==active.started && model.view(utc).own);
   JsonDocument ending;ending["reason"]="logoff";ending["kicked"]=false;ending["checkinId"]=active.id;
   ending["memberId"]=active.member;ending["_id"]="eeeeeeeeeeeeeeeeeeeeeeee";ending["time"]=utc+1000;
-  sessionEnded(ending.as<JsonVariantConst>());assert(journal["operations"].size()==2 && tracked[0].released);
-  offline=true;advance();boot();network();assert(journal["operations"].size()==2);
-  offline=false;loseAck=true;advance();network();assert(journal["operations"].size()==2);
-  loseAck=false;advance();network();assert(journal["operations"].size()==0 && uploads.size()>=3);
+  assert(sessionEnded(ending.as<JsonVariantConst>()));assert(journal["operations"].size()==1 && journal["releases"].size()==1 && tracked[0].released);
+  offline=true;advance();boot();network();assert(journal["operations"].size()==1 && journal["releases"].size()==1);
+  offline=false;loseAck=true;advance();network();assert(journal["operations"].size()==1 && journal["releases"].size()==1);
+  loseAck=false;advance();network();assert(journal["operations"].size()==0 && journal["releases"].size()==0 && uploads.size()>=3);
   assert(std::any_of(uploads.begin(),uploads.end(),[](const std::string &s){return s.find("claim")!=std::string::npos;}));
   assert(std::any_of(uploads.begin(),uploads.end(),[](const std::string &s){return s.find("release")!=std::string::npos;}));
+
+  seed();advance(1000);
+  inventory["reservations"][0]["startAt"]=utc+3*grace;
+  auto earlier=inventory["reservations"].as<JsonArray>().add<JsonObject>();
+  earlier["id"]="111111111111111111111111";earlier["memberId"]="222222222222222222222222";
+  earlier["name"]="Other";earlier["startAt"]=utc+grace;earlier["endAt"]=utc+2*grace;
+  refreshHint();network();
+  active={"cccccccccccccccccccccccc","dddddddddddddddddddddddd",utc};service();
+  auto *owner=tracking("aaaaaaaaaaaaaaaaaaaaaaaa");
+  assert(owner && owner->arrived==active.started && owner->associatedSession==active.id);
+  ending["time"]=utc+1000;sessionEnded(ending.as<JsonVariantConst>());
+  assert(owner->released && !tracking("111111111111111111111111")->released);
+  assert(journal["operations"].size()==1 && journal["releases"].size()==1 && journal["releases"][0]["kind"]=="release");
+
+  for(bool partial : {false,true}) {
+    seed();advance(1000);inventory["reservations"][0]["startAt"]=utc-grace;
+    boot(); // Scan before the initial inventory fetch completes.
+    active={"cccccccccccccccccccccccc","dddddddddddddddddddddddd",utc};
+    if(partial) {inventory["complete"]=false;network();}
+    service();assert(journal["operations"].size()==0);
+    advance(1000);service();assert(journal["operations"].size()==0);
+    inventory["complete"]=true;refreshHint();network();advance(500);service();
+    assert(tracked[0].arrived==active.started && journal["operations"].size()==1);
+    assert(journal["operations"][0]["observedAt"]==active.started);
+  }
+
+  // A full attendance queue leaves independent durable room for logoff releases.
+  seed();active={"cccccccccccccccccccccccc","dddddddddddddddddddddddd",utc};service();
+  for(int i=1;i<64;++i) {JsonDocument op;op["kind"]="claim";op["observedAt"]=i;assert(queue(op));}
+  ending["time"]=utc+1000;
+  assert(sessionEnded(ending.as<JsonVariantConst>()));
+  assert(sessionEnded(ending.as<JsonVariantConst>())); // Replays cannot duplicate the release.
+  assert(journal["operations"].size()==64 && journal["releases"].size()==1 && tracked[0].released);
+  JsonDocument statistics;stats(statistics.to<JsonObject>());assert(statistics["pending"]==65);
+  String retainedRelease;serializeJson(journal["releases"][0],retainedRelease);
+  offline=true;advance();boot();network();
+  assert(journal["releases"].size()==1 && tracked[0].released);
+  active={"ffffffffffffffffffffffff","dddddddddddddddddddddddd",utc};service();
+  offline=false;advance(); // Allow the offline retry backoff to expire.
+  for(int i=0;i<16;++i) {advance(1000);network();}
+  assert(journal["operations"].size()==0 && journal["releases"].size()==1);
+  loseAck=true;advance(1000);network();assert(journal["releases"].size()==1);
+  loseAck=false;advance(1000);boot();network();
+  assert(journal["releases"].size()==0);
+  assert(std::count(uploads.begin(),uploads.end(),std::string(retainedRelease))==2);
 
   seed(false);int readBefore=reads;advance();boot();network();assert(reads==readBefore && !eligible);
   advance(86400001);inventory["reservable"]=true;network();assert(reads==readBefore+1 && eligible);
@@ -95,9 +140,9 @@ int main(){
   flash["/reservations"]="broken";advance();boot();assert(uncertain);
   seed();flash["/reservations.tmp"]="interrupted write";advance();boot();assert(uncertain);
   seed();active={"cccccccccccccccccccccccc","dddddddddddddddddddddddd",utc};service();
-  ending["time"]=utc+1000;failStorage=true;sessionEnded(ending.as<JsonVariantConst>());
-  failStorage=false;boot();sessionEnded(ending.as<JsonVariantConst>()); // Production startup replays the retained session ending.
-  assert(journal["operations"].size()==2 && tracked[0].released);
+  ending["time"]=utc+1000;failStorage=true;assert(!sessionEnded(ending.as<JsonVariantConst>()));
+  failStorage=false;boot();assert(sessionEnded(ending.as<JsonVariantConst>())); // Production startup replays the retained session ending.
+  assert(journal["operations"].size()==1 && journal["releases"].size()==1 && tracked[0].released);
   seed();advance(6000000);service();inventory["reservations"].to<JsonArray>();
   serverArrival=utc-5000000;network();assert(tracked.empty()); // Centrally recovered attendance retires expired records.
   seed();advance(6000000);service();inventory["reservations"].to<JsonArray>();

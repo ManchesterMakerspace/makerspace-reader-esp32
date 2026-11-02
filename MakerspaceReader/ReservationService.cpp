@@ -48,7 +48,8 @@ void setup() {
   if (!exists) { freshJournal=!interrupted; uncertain=interrupted; loaded=true; return; }
   String raw;
   if (!sealRead(file,raw,false) || raw.length()>65536 || deserializeJson(journal,raw) ||
-      journal["version"].as<int>()!=1 || journal["tracked"].size()>capacity || journal["operations"].size()>64) {
+      journal["version"].as<int>()!=1 || journal["tracked"].size()>capacity || journal["operations"].size()>64 ||
+      journal["releases"].size()>capacity) {
     uncertain=true; journal.clear(); loaded=true; return;
   }
   scope=journal["scope"] | ""; coveredFrom=journal["coveredFrom"] | int64_t(0);
@@ -68,7 +69,10 @@ static Record *tracking(const std::string &id) {
 }
 static bool queue(JsonDocument &op) {
   String key; serializeJson(op,key);
-  auto operations=journal["operations"].is<JsonArray>() ? journal["operations"].as<JsonArray>() : journal["operations"].to<JsonArray>();
+  // Reserve durable space for logoffs independently of the attendance queue.
+  // A full claim backlog must not keep the tool-session journal open.
+  const char *field=op["kind"]=="release" ? "releases" : "operations";
+  auto operations=journal[field].is<JsonArray>() ? journal[field].as<JsonArray>() : journal[field].to<JsonArray>();
   for(auto old:operations) {
     const char *eventField=op["kind"]=="claim" ? "checkinId" : "checkendId";
     if(op["reservationId"].is<const char *>() && op[eventField].is<const char *>() &&
@@ -82,16 +86,22 @@ static bool queue(JsonDocument &op) {
   operations.add(op.as<JsonVariantConst>());
   return save();
 }
-void sessionEnded(JsonVariantConst event) {
-  if(!loaded || String(event["reason"] | "")!="logoff" || event["kicked"]==true) return;
+bool sessionEnded(JsonVariantConst event) {
+  if(String(event["reason"] | "")!="logoff" || event["kicked"]==true) return true;
+  if(!loaded) return false;
+  bool queued=true, matched=false;
   for(auto &r:tracked) {
     if(!r.arrived || r.released || r.associatedSession!=String(event["checkinId"] | "").c_str() ||
         r.member!=String(event["memberId"] | "").c_str() || r.end<=(event["time"] | int64_t(0))) continue;
+    matched=true;
     JsonDocument op; op["kind"]="release"; op["reservationId"]=r.id; op["revision"]=r.revision;
     op["checkendId"]=event["_id"];
     if(queue(op)) { r.released=true; if(auto *record=model.find(r.id)) record->released=true; }
+    else queued=false;
   }
-  save(); hinted=true;
+  if(!matched) return true;
+  bool saved=save(); hinted=true;
+  return queued && saved;
 }
 void service() {
   if(!loaded) return;
@@ -108,7 +118,7 @@ void service() {
   }
   if(!active || !clockTrusted) { evaluatedThrough=0; audio::cancelReservation(); return; }
   const int64_t now=epochMs();
-  if(!coveredFrom) { coveredFrom=now; if(freshJournal && tracked.empty() && journal["operations"].size()==0) uncertain=false; freshJournal=false; save(); }
+  if(!coveredFrom) { coveredFrom=now; if(freshJournal && tracked.empty() && journal["operations"].size()==0 && journal["releases"].size()==0) uncertain=false; freshJournal=false; save(); }
   if(lossBaseline!=dropped.load()) { uncertain=true; save(); lossBaseline=dropped.load(); }
   Session current; captureSession(current); model.setSession(current);
   bool sessionChanged=current.id!=alertSession;
@@ -162,7 +172,7 @@ void displayStatus(display::Status &s) {
 }
 void stats(JsonObject out) {
   out["enabled"]=enabled.load(); out["reservable"]=eligible; out["complete"]=model.complete;
-  out["coverageUncertain"]=uncertain; out["pending"]=journal["operations"].size();
+  out["coverageUncertain"]=uncertain; out["pending"]=journal["operations"].size()+journal["releases"].size();
   out["cached"]=model.records.size(); out["tracked"]=tracked.size(); out["lastCheckedAt"]=checkedAt;
 }
 static bool sync(JsonDocument &request,JsonDocument &response,bool capable) {
@@ -185,7 +195,7 @@ void network() {
   static uint32_t lastAttempt=0;
   if(!loaded || !clockTrusted || (lastAttempt && mono-lastAttempt<1000) || (int32_t(mono-nextNetwork)<0 && !hinted)) return;
   bool capable; String currentScope; int64_t since, checked; bool reservable, pending, haveTracked;
-  { Lock s(stateMutex); capable=enabled; currentScope=scope; since=coveredFrom; checked=checkedAt; reservable=eligible; pending=journal["operations"].size()>0; haveTracked=!tracked.empty(); }
+  { Lock s(stateMutex); capable=enabled; currentScope=scope; since=coveredFrom; checked=checkedAt; reservable=eligible; pending=journal["operations"].size()>0 || journal["releases"].size()>0; haveTracked=!tracked.empty(); }
   if(!capable && !pending) return;
   if(capable && !reservable && !pending && !haveTracked && checked && epochMs()-checked<86400000) { hinted=false; return; }
   lastAttempt=mono;
@@ -237,13 +247,15 @@ void network() {
   static size_t cursorOp=0;
   for(unsigned n=0;ok && n<4;++n) {
     JsonDocument request,response; String sent;
-    { Lock s(stateMutex); auto ops=journal["operations"].as<JsonArray>(); if(!ops.size()) break;
+    const char *field;
+    { Lock s(stateMutex); field=journal["operations"].size() ? "operations" : "releases";
+      auto ops=journal[field].as<JsonArray>(); if(!ops.size()) break;
       cursorOp%=ops.size(); request["operations"].to<JsonArray>().add(ops[cursorOp]); serializeJson(ops[cursorOp],sent); }
     ok=sync(request,response,capable);
     if(ok) {
       const String outcome=response["results"][0]["outcome"] | "";
       Lock s(stateMutex);
-      auto ops=journal["operations"].as<JsonArray>();
+      auto ops=journal[field].as<JsonArray>();
       if(outcome=="accepted" || outcome=="stale" || outcome=="gone" || outcome=="blocked") {
         for(size_t i=0;i<ops.size();++i) { String value; serializeJson(ops[i],value); if(value==sent) {ops.remove(i);break;} }
         if(outcome!="accepted") {
@@ -272,7 +284,7 @@ void network() {
     {
       Lock s(stateMutex);
       auto ops=request["operations"].to<JsonArray>();
-      bool drained=journal["operations"].size()==0 && checkpointThrough && model.complete && eventsDrained && attendanceReady();
+      bool drained=journal["operations"].size()==0 && journal["releases"].size()==0 && checkpointThrough && model.complete && eventsDrained && attendanceReady();
       for(size_t examined=0;examined<tracked.size() && ops.size()<16;++examined) {
         trackedCursor%=tracked.size(); auto &r=tracked[trackedCursor++];
         if(r.monitored && (r.arrived || epochMs()<=r.start+grace || !drained)) continue;
@@ -312,7 +324,7 @@ void network() {
   uint32_t wait=ok ? 60000 : retryMs;
   if(ok) {
     Lock s(stateMutex);
-    if(!journal["operations"].size()) {
+    if(!journal["operations"].size() && !journal["releases"].size()) {
       auto before=tracked.size();
       tracked.erase(std::remove_if(tracked.begin(),tracked.end(),[](const Record &r){return (r.arrived || !r.monitored) && r.end<=epochMs();}),tracked.end());
       if(before!=tracked.size()) save();

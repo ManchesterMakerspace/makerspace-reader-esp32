@@ -67,7 +67,11 @@ pending attendance or unacknowledged session events. Corruption, audit loss, ove
 scope changes and missing coverage prevent absence-based release. Fees are retained.
 
 The encrypted `/reservations` journal holds tracked bookings, arrival associations,
-negative capability cache, coverage provenance and at most 64 pending operations.
+negative capability cache, coverage provenance and at most 64 pending attendance
+operations plus 64 pending releases. Releases have a separate durable queue so a
+full attendance backlog cannot lose a voluntary logoff or block a new tool session.
+The session ending remains open for retry if its release cannot be saved; after
+the handoff, releases survive subsequent check-ins and reboot independently.
 API acknowledgment precedes removal; replay is idempotent. Journal capacity/read
 failures mark reservation coverage uncertain without changing tool authorization.
 Changing tool/role starts a new coverage interval and preserves any existing loss

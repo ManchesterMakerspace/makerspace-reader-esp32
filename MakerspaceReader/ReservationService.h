@@ -13,7 +13,7 @@ bool subscribing();
 std::vector<String> hintTopics();
 void displayStatus(display::Status &);
 void stats(JsonObject); // stateMutex held
-void sessionEnded(JsonVariantConst event); // stateMutex held; never performs network I/O
+bool sessionEnded(JsonVariantConst event); // stateMutex held; true only after durable release handoff; no network I/O
 void captureSession(Session &); // stateMutex held; implemented by ToolSessionService
 bool attendanceReady(); // stateMutex held; no undelivered ending remains in the session journal
 void recoverSessionEnd(); // replay the last durable logoff if reservation persistence was interrupted
