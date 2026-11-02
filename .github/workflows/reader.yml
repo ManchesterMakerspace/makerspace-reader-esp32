@@ -4,15 +4,23 @@ permissions:
   contents: read
 jobs:
   firmware-and-host-tests:
-    name: Firmware (${{ matrix.flash }} MB, Wi-Fi=${{ matrix.wifi }}, reservations=${{ matrix.reservations }})
+    name: Firmware (${{ matrix.board }}, ${{ matrix.flash }} MB, Wi-Fi=${{ matrix.wifi }}, reservations=${{ matrix.reservations }})
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
+        board: [waveshare]
         flash: [4, 8, 16]
         wifi: [false, true]
         reservations: [0, 1]
+        include:
+          - { board: olimex, flash: 4, wifi: false, reservations: 0 }
+          - { board: olimex, flash: 4, wifi: false, reservations: 1 }
+          - { board: olimex, flash: 4, wifi: true, reservations: 0 }
+          - { board: olimex, flash: 4, wifi: true, reservations: 1 }
+          - { board: qtpy, flash: 4, wifi: true, reservations: 0 }
+          - { board: qtpy, flash: 4, wifi: true, reservations: 1 }
     steps:
       - uses: actions/checkout@v4
       - uses: arduino/setup-arduino-cli@v2
@@ -30,4 +38,10 @@ jobs:
         run: ./scripts/test.ps1
       - name: Compile ESP32 firmware using placeholder bench configuration
         shell: pwsh
-        run: ./scripts/build.ps1 -Reservations ${{ matrix.reservations }} -Fqbn "esp32:esp32:esp32s3:FlashSize=${{ matrix.flash }}M,PSRAM=opi,PartitionScheme=custom,DebugLevel=info"
+        run: |
+          $fqbn = switch ('${{ matrix.board }}') {
+            'waveshare' {'esp32:esp32:esp32s3:FlashSize=${{ matrix.flash }}M,PSRAM=opi,PartitionScheme=custom,DebugLevel=info'}
+            'olimex' {'esp32:esp32:esp32-poe:FlashSize=4M,PartitionScheme=custom,DebugLevel=info'}
+            'qtpy' {'esp32:esp32:adafruit_qtpy_esp32s3_n4r2:PSRAM=enabled,PartitionScheme=default,USBMode=hwcdc,DebugLevel=info'}
+          }
+          ./scripts/build.ps1 -Reservations ${{ matrix.reservations }} -Fqbn $fqbn

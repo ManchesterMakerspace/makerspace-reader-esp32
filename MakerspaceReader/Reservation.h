@@ -1,18 +1,24 @@
 #pragma once
 #include "ReservationConfig.h"
 #if READER_ENABLE_RESERVATIONS
+#include "BoardConfig.h"
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace reservation {
 constexpr int64_t hour = 3600000, grace = 900000;
-constexpr size_t capacity = 64;
-struct Record {
-  std::string id, member, name, associatedSession;
+constexpr size_t capacity = readerBoard::reservationRecords;
+struct Reference {
+  std::string id, member, associatedSession;
   int64_t start = 0, end = 0, arrived = 0;
   uint32_t revision = 0;
   bool monitored = false, released = false;
+};
+struct Record : Reference {
+  std::string name;
+  Record() = default;
+  Record(const Reference &r):Reference(r) {}
 };
 struct Session {
   std::string id, member; int64_t started;

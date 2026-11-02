@@ -17,7 +17,13 @@ std::vector<std::string> snapshotRequestedUids() {
    if (cards.at(b).uid == activeUid) return false;
    return cards.at(a).lastUsed == cards.at(b).lastUsed ? a < b : cards.at(a).lastUsed > cards.at(b).lastUsed;
  });
- if (requested.size() > 65) requested.resize(65); // 64 recent ordinary cards + pinned owner
+ size_t pinned=0;
+ for(const auto &p:cards) if(p.second.managesTool && p.second.uid!=activeUid) ++pinned;
+ size_t room=readerProfile::cards>pinned ? readerProfile::cards-pinned : 0;
+ // The active owner is mandatory, even if the server must report a conflict.
+ if(!activeUid.isEmpty() && cards.count(activeUid.c_str())) room=std::max(room,size_t(1));
+ size_t limit=readerProfile::compact ? std::min(room,size_t(readerBoard::recentCards+1)) : room;
+ if(requested.size()>limit) requested.resize(limit);
  return requested;
 }
 void cacheScannedCard(const Card &card) {
@@ -39,7 +45,7 @@ void trimCardCache() {
  std::sort(ordinary.begin(),ordinary.end(),[](const std::string &a,const std::string &b) {
    return cards.at(a).lastUsed == cards.at(b).lastUsed ? a < b : cards.at(a).lastUsed < cards.at(b).lastUsed;
  });
- size_t remove = ordinary.size()>64 ? ordinary.size()-64 : 0;
+ size_t remove = ordinary.size()>readerBoard::recentCards ? ordinary.size()-readerBoard::recentCards : 0;
  if (cards.size()>readerProfile::cards) remove=std::max(remove,cards.size()-readerProfile::cards);
  for(size_t i=0;i<remove && i<ordinary.size();i++) cards.erase(ordinary[i]);
  if(cards.size()>readerProfile::cards) failCacheCapacity();
@@ -55,5 +61,5 @@ void trimCardCache() {
 bool cacheCapacityResponse(const String &path, int code, JsonVariantConst error) {
  if (code != 409 || (path != "/reader/v1/snapshot" && path != "/reader/v1/snapshot/recent")) return false;
  String message = error["message"] | "";
- return message == "Eligible card cache capacity exceeded" || message == "Checkout cache capacity exceeded";
+ return message == "Eligible card cache capacity exceeded" || message == "Checkout cache capacity exceeded" || message == "Snapshot response byte capacity exceeded";
 }

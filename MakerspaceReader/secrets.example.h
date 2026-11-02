@@ -19,6 +19,7 @@
 // Snapshot and card freshness interval; may also be set with compiler -D.
 // #define READER_REFRESH_INTERVAL_MS 900000UL
 
-// Optional Ethernet fallback. Define BOTH; otherwise Wi-Fi stays off.
+// Ethernet boards: optional fallback. QT Py: BOTH are required for station Wi-Fi.
+// Define neither only on Ethernet boards; their Wi-Fi radio then stays off.
 // #define WIFI_SSID "your-network"
 // #define WIFI_PSK "your-network-password"

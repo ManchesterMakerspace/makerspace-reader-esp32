@@ -58,3 +58,35 @@ recovery event. Confirm two independent tool/shop flags clear only with API data
 Verify no duplicate stored events after reconnect/PUBACK loss. Test journal/flash
 write failures and LCD absence with a dummy load before attaching equipment.
 Public wiki instructions must remain a draft until this rollout is commissioned.
+
+## Board-profile commissioning (unexecuted hardware acceptance)
+
+Use the staged board commands and pin table in README.md; the application header
+is authoritative. Support is limited to Olimex 4 MB WROOM/no PSRAM and QT Py S3
+4 MB/2 MB QSPI PSRAM. WROVER, other QT Py memories, external QT Py Ethernet and
+additional I2C buses are excluded. Keep Olimex SD unused. Use QT Py STEMMA QT.
+
+- [ ] Confirm printed configured/detected flash and PSRAM, all pin assignments,
+  unused interfaces and budgets; start without a USB host and with debug logging off.
+- [ ] Verify OFF relay at reset, unchanged expiry/kick timing, and physical pull-down.
+- [ ] Probe each supported I2C address; distinguish ACK, initialization failure and
+  recovery. Test absent peripherals and both responding NFC addresses safely, without
+  electrically tying incompatible IRQ outputs together. PN7160 retains priority.
+- [ ] Verify Olimex RMII power/clock/link/DHCP; Wi-Fi fallback and wired priority on
+  both Ethernet boards. Confirm immediate QT Py station startup and reconnect.
+- [ ] Check authenticated `/config` on wired/station transports at 320/600/900/1280 px,
+  keyboard navigation, escaping and no secrets. Reject missing authentication/CSRF,
+  active-relay writes, disallowed transports and path aliases. GET must cause no bus traffic.
+- [ ] Fill caches, queues and journals using maximum-length UTF-8 data while running
+  TLS/MQTT, NFC and display/audio. Record internal heap minimum and largest free block.
+  Require no allocation failures, resets, timing regressions or lost acknowledged work.
+- [ ] Reduce a profile with an oversized snapshot/journal. Preserve the old reservation
+  file and all audit events; refresh cards authoritatively. Verify coverage remains
+  uncertain and ordinary access remains usable if reservation storage is incompatible.
+- [ ] Exercise queue saturation, replay/lost ACKs, full spool eviction/loss reporting,
+  reconnect, power loss, reboot and signed OTA. Never substitute host mocks for this run.
+
+Deploy compatible ts-data-api options first. First flashing a board requires the
+staged partition table; ordinary OTA preserves its existing layout. Changing an
+older layout remains a separate planned migration after draining events. No flashing,
+formatting, eFuse changes, deployment or wiki publication is part of implementation.

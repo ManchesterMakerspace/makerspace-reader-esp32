@@ -1,3 +1,4 @@
+#include "BoardConfig.h"
 #include "Reader.h"
 #include <Ticker.h>
 #include <algorithm>
@@ -16,7 +17,7 @@ static void armRelayTimer() {
 void stopRelay(const char *reason, const Card *actor) {
   relayTicker.detach();
   relayOffEvent = false;
-  digitalWrite(RELAY_PIN, LOW);
+  digitalWrite(RELAY_PIN, readerBoard::relayOff);
   endToolSession(reason, actor);
   relayOn = false;
   relayDeadline = 0;
@@ -34,7 +35,7 @@ void startRelay(int64_t durationMs, int64_t until, const String &uid) {
   toolDeadline = until;
   activeUid = uid;
   armRelayTimer(); // once_ms() replaces any previous countdown.
-  digitalWrite(RELAY_PIN, HIGH);
+  digitalWrite(RELAY_PIN, readerBoard::relayOn);
   relayOn = true;
 }
 void recheckActiveTool() {

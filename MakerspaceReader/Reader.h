@@ -7,7 +7,7 @@
 #include <deque>
 #include <unordered_map>
 #include <vector>
-constexpr uint8_t RELAY_PIN = 21;
+constexpr uint8_t RELAY_PIN = readerBoard::relay;
 struct Card {
   String uid, id, member, holder, status, key, digest;
   int64_t expiry = 0, first = 0;

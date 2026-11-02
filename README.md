@@ -3,9 +3,9 @@
 Optional Tool-mode reservation attendance, countdowns, warnings and compile-out
 instructions are in [Tool reservations](docs/RESERVATIONS.md).
 
-Arduino IDE firmware for Waveshare ESP32-S3-ETH (16 MB flash / OPI PSRAM), Elechouse PN7160 (or PN532 I2C fallback), and the companion ts-data-api service. The implementation supports authenticated card enrollment and scans, all five relay roles, Ethernet HTTPS/MQTTS, offline caches and audit replay, optional I2C peripherals, authenticated management pages, and ElegantOTA.
+Arduino firmware for Waveshare ESP32-S3-ETH (OPI PSRAM), Olimex ESP32-PoE (4 MB WROOM, no PSRAM), and Adafruit QT Py S3 (4 MB flash / 2 MB QSPI PSRAM), Elechouse PN7160 (or PN532 I2C fallback), and the companion ts-data-api service. The implementation supports authenticated card enrollment and scans, all five relay roles, Ethernet HTTPS/MQTTS, offline caches and audit replay, optional I2C peripherals, authenticated management pages, and ElegantOTA.
 
-[PLAN.md](PLAN.md) is the raw Markdown plan. [Commissioning](docs/COMMISSIONING.md) lists mandatory hardware verification. [Protocol and storage](docs/PROTOCOL.md) explains the data contracts and failure behavior.
+[Commissioning](docs/COMMISSIONING.md) lists mandatory hardware verification. [Protocol and storage](docs/PROTOCOL.md) explains the data contracts and failure behavior.
 
 ## Build
 
@@ -32,6 +32,50 @@ Persisted keys require `CONFIG_NVS_ENCRYPTION=y` and the existing secure product
 **Stock Arduino builds intentionally deny production admission and OTA.** READER_PRODUCTION=1 requires secure boot, flash encryption, and a core compiled with native signed-image verification. For isolated bench tests with a dummy relay, set READER_PRODUCTION=0. That is not a production security profile. See docs/sdkconfig.production.defaults and the commissioning guide for the separately built production core.
 
 
+### Board profiles and staged builds
+
+`MakerspaceReader/BoardConfig.h` owns application pins, capabilities and resource
+budgets. Arduino board macros select the native profile; `-Board 1`, `-Board 2`
+and `-Board 3` pass the global `READER_BOARD` override for generic board builds.
+Incompatible architecture, PSRAM or flash settings are rejected. Partition
+layouts remain in `FlashProfile.h` and `scripts/flash-profile.ps1`.
+
+```powershell
+# Waveshare, compact flash example (also supports 8M/16M)
+./scripts/build.ps1 -Reservations 1 -Fqbn 'esp32:esp32:esp32s3:FlashSize=4M,PSRAM=opi,PartitionScheme=custom,DebugLevel=info'
+# Olimex WROOM; SD unused; optional Wi-Fi fallback
+./scripts/build.ps1 -Reservations 1 -Fqbn 'esp32:esp32:esp32-poe:FlashSize=4M,PartitionScheme=custom,DebugLevel=info'
+# QT Py: both WIFI_SSID and WIFI_PSK are required
+./scripts/build.ps1 -Reservations 1 -Fqbn 'esp32:esp32:adafruit_qtpy_esp32s3_n4r2:PSRAM=enabled,PartitionScheme=default,USBMode=hwcdc,DebugLevel=info'
+```
+
+Use `-Reservations 0` to compile out reservations. Outputs are isolated under
+`build/board-<number>-<Arduino variant>/profile-<MiB>[-no-reservations]`.
+The script stages the correct sketch partition table, checks the compiler's copy,
+and enforces at least 10% OTA slot headroom. The 4 MB profiles use C++-only LTO.
+QT Py has no `custom` partition menu: use `default` with this staged table, never
+TinyUF2 additions. Flash the generated partition table on first commissioning;
+ordinary OTA cannot change an installed layout. Do not use the unstaged 16 MB
+sketch table on either new 4 MB board.
+
+| Budget | Olimex (no PSRAM) | 4 MB with PSRAM | 8/16 MB with PSRAM |
+| --- | ---: | ---: | ---: |
+| Cards / checkouts | 32 / 32 | 64 / 64 | 300 / 150 |
+| Recent ordinary cards | 16 | 32 | Full snapshot |
+| Snapshot ceiling | 32 KiB | 64 KiB | 320 KiB |
+| Audit spool | 64 KiB | 64 KiB | 2 / 3 MiB |
+| Reservation summaries | 16 | 16 | 16 |
+| Pending reservation operations / references | 16 / 16 | 64 / 64 | 64 / 64 |
+| Reservation journal | 16 KiB | 64 KiB | 64 KiB |
+
+Claims and releases share the pending-operation budget. Monitoring, arrival
+associations and deferred endings share the reconciliation-reference budget.
+No-PSRAM limits take precedence. Privileged cards and the active owner are pinned;
+recent ordinary cards use the existing recency policy. Oversized snapshots require
+an authoritative refresh. An incompatible reservation journal is preserved and
+reservation mutations suspend until compatible firmware can drain it; storage is
+never reformatted to accommodate a smaller profile.
+
 ### Arduino IDE NFC library selection
 
 ElectronicCats PN7150 v3.1.1 is not the driver used by this sketch. Its shared Electroniccats_PN7150.h name previously let Arduino select it instead of the bundled ELECHOUSE 3.1.3 fork. That causes missing setI2CPins, setVerboseTrace and setPn7160FixedVbat3V3 errors. Do not remove those calls or substitute an unpatched Library Manager release: this project also requires the bundled short-read fixes.
@@ -42,20 +86,41 @@ Enable verbose compilation output in IDE preferences and verify the selected NFC
 
 ## Wiring
 
-| Function | GPIO / address |
-| --- | --- |
-| Shared I2C | SDA 1, SCL 2; 100 kHz; 3.3 V logic |
-| PN7160 (preferred) | IRQ 17 active HIGH, VEN 18, I2C 0x28 |
-| PN532 (fallback) | IRQ 17 active LOW, RSTPD_N 18, default I2C 0x24 |
-| W5500 | MOSI 11, MISO 12, SCLK 13, CS 14, IRQ 10, RST 9 |
-| Active-HIGH relay driver | GPIO 21; external pull-down; suitable driver/flyback protection |
-| Optional Qwiic buzzer | 0x34 |
-| Optional RGB SerLCD 16x2 | 0x72 |
-| Optional PCF8523 RTC | 0x68; battery-backed UTC |
+The header is authoritative; this table documents its supported wiring. All
+peripherals share the explicitly initialized 100 kHz I2C bus (50 ms timeout).
+Serial uses 115200 baud and startup never waits for a USB host. Relays are active
+HIGH, switched OFF first, and require an external pull-down and suitable driver /
+flyback protection.
+
+| Function | Waveshare S3-ETH | Olimex ESP32-PoE | QT Py S3 N4R2 |
+| --- | --- | --- | --- |
+| SDA / SCL | 1 / 2 | 13 / 16 | 41 / 40 (STEMMA QT) |
+| Relay | 21 | 33 | 9 (A2) |
+| NFC IRQ / reset | 17 / 18 | 4 / 14 | 17 / 18 (A1 / A0) |
+| SPI MOSI / MISO / SCLK | 11 / 12 / 13 | Unused | Unused |
+| W5500 CS / IRQ / reset | 14 / 10 / 9 | Unused | Unused |
+| RMII MDC / MDIO / power | Unused | 23 / 18 / 12 | Unused |
+| Ethernet clock / PHY address | SPI / 1 | GPIO17 output / 0 | Unused |
+
+Olimex LAN8710A uses the core's `ETH_PHY_LAN8720` driver. Its SD interface must
+remain unused because NFC reset uses GPIO14. QT Py uses STEMMA QT, not the header
+SDA/SCL defaults; no SPI/Ethernet initialization or retries are compiled into that
+profile. Ethernet boards prioritize wired connectivity and shut Wi-Fi down when
+Ethernet is restored; QT Py starts station Wi-Fi immediately.
+
+Supported I2C addresses: PN532 `0x24`, PN7160 `0x28`, Qwiic buzzer `0x34`, PCF8523
+RTC `0x68`, SerLCD `0x72`. Startup prints board/memory/budgets/pins and the bounded
+probe inventory independently of debug logging. Subsequent driver status messages
+distinguish an ACK from successful initialization. Authenticated `/config` shows
+the same inventory without probing the bus; hardware settings are read-only.
+Viewing works over available transports. QT Py permits authenticated station-Wi-Fi
+configuration POSTs with the existing CSRF, idle-relay and server checks; Ethernet
+boards retain Ethernet-only writes with Wi-Fi off. Provisioning/recovery routes
+retain their existing restrictions. Credentials and keys are never displayed.
 
 Connect **one NFC module**, with its IRQ and reset/enable lines wired as shown. Put a PN532 module's switches/jumpers in I2C mode; 0x24 is the 7-bit address (0x48 is the write-address byte). The firmware enables the module before probing 0x28, and tries 0x24 only if PN7160 is absent. A present PN7160 that fails initialization is retried, without switching controllers. Missing/unhealthy controllers retry initialization every three seconds.
 
-PN7160 discovery waits for a rising IRQ on GPIO 17 and queries only while that line is HIGH. A level check also handles IRQ already asserted before the task waits. The interrupt only wakes the NFC task; all I2C work stays in task context under the shared bus lock. PN532 uses falling IRQ/LOW with asynchronous target discovery. Idle waits do not poll either reader over I2C; initialization, recovery and host commands still transmit as needed. The PN532 transport is included in the sketch and needs no extra Arduino library.
+PN7160 discovery waits for a rising IRQ on the configured NFC IRQ pin and queries only while that line is HIGH. A level check also handles IRQ already asserted before the task waits. The interrupt only wakes the NFC task; all I2C work stays in task context under the shared bus lock. PN532 uses falling IRQ/LOW with asynchronous target discovery. Idle waits do not poll either reader over I2C; initialization, recovery and host commands still transmit as needed. The PN532 transport is included in the sketch and needs no extra Arduino library.
 
 The PN7160 configuration assumes the module's normal VDD(UP)=3.3 V / VANT=5 V supply arrangement, not its fixed-VBAT 3.3 V mode. Verify the exact Elechouse board jumpers and power rails before applying power. No Wi-Fi connection is configured.
 
@@ -105,7 +170,7 @@ Readers hold read keys for cached cards and must be trusted devices. Production 
 ./scripts/build.ps1
 ```
 
-The host cache fixture measures 211,315 bytes for 300 maximum-size cards and 150 grants, below the 320 KiB per-snapshot limit. These tests and compilation do not validate RF behavior, actual relay timing, power-loss recovery, or signed production OTA. Record those results using docs/COMMISSIONING.md.
+The host cache fixture measures 211,315 bytes for 300 bounded multibyte-name cards and 150 grants, below the 320 KiB per-snapshot limit. These tests and compilation do not validate RF behavior, actual relay timing, power-loss recovery, or signed production OTA. Record those results using docs/COMMISSIONING.md.
 
 Companion ts-data-api setup and contracts are in its READER_API.md. Deploy the API and indexes before configuring readers. The wiki draft under docs/wiki is held until the system is commissioned and released.
 

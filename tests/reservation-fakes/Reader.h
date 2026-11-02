@@ -30,3 +30,10 @@ bool sealWrite(const String &,const String &,bool);
 bool sealRead(const String &,String &,bool);
 bool api(const String &,JsonDocument &,const String &body=String());
 #define log_e(...) ((void)0)
+
+struct Preferences {
+ bool gap=false;
+ bool getBool(const char *,bool fallback) {return gap || fallback;}
+ size_t putBool(const char *,bool v) {gap=v; return 1;}
+};
+extern Preferences prefs;

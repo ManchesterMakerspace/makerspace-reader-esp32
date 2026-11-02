@@ -6,7 +6,7 @@
 #include "Reader.h"
 #include "ReservationService.h"
 #include "secrets.h"
-#include <ETH.h>
+
 #include <HTTPClient.h>
 #include <LittleFS.h>
 #include <NetworkClientSecure.h>
@@ -52,10 +52,12 @@ bool api(const String &path, JsonDocument &response, const String &body) {
   http.addHeader("Content-Type", "application/json");
   int code = body.length() ? http.POST(body) : http.GET();
   bool ok = false, capacityFailure = false;
-  int maxResponse = 524288;
+  int maxResponse = readerProfile::snapshotBytes;
 #if READER_ENABLE_RESERVATIONS
   if(path.startsWith("/reader/v1/reservations")) maxResponse=16384;
 #endif
+  if(code==200 && http.getSize()>maxResponse &&
+      (path=="/reader/v1/snapshot" || path=="/reader/v1/snapshot/recent")) capacityFailure=true;
   if (code == 200 && http.getSize() >= 0 && http.getSize() <= maxResponse) {
     String raw = http.getString();
     if (raw.length() <= size_t(maxResponse))
@@ -96,7 +98,7 @@ bool api(const String &path, JsonDocument &response, const String &body) {
   if (!ok) {
     log_e("MongoDB API %s failed: HTTP/transport code=%d (200 means invalid response)", path.c_str(), code);
     Lock s(stateMutex);
-    if (capacityFailure) failCacheCapacity();
+    if (capacityFailure) { response["capacityConflict"]=true; }
     else lastError = "API " + String(code) + " " + path;
   }
   return ok;
@@ -139,14 +141,31 @@ static void refresh() {
   JsonDocument result;
   String requestBody;
   std::vector<std::string> requested;
-  if (readerProfile::compact) {
-    JsonDocument request; auto uids=request["uids"].to<JsonArray>();
-    { Lock s(stateMutex); requested=snapshotRequestedUids(); for(const auto &uid:requested) uids.add(uid.c_str()); }
-    serializeJson(request,requestBody);
-  }
-  if (!api(readerProfile::compact ? "/reader/v1/snapshot/recent" : "/reader/v1/snapshot", result, requestBody)) {
-    refreshNeeded = true;
-    return;
+  if(readerProfile::compact) { Lock s(stateMutex); requested=snapshotRequestedUids(); }
+  for(;;) {
+    if(readerProfile::compact) {
+      JsonDocument request; auto uids=request["uids"].to<JsonArray>();
+      for(const auto &uid:requested) uids.add(uid.c_str());
+      request["cardLimit"]=readerProfile::cards;
+      request["checkoutLimit"]=readerProfile::grants;
+      request["responseBytes"]=readerProfile::snapshotBytes;
+      requestBody=""; serializeJson(request,requestBody);
+    }
+    result.clear();
+    if(api(readerProfile::compact ? "/reader/v1/snapshot/recent" : "/reader/v1/snapshot",result,requestBody)) break;
+    if(result["capacityConflict"]==true) {
+      if(!readerProfile::compact) { Lock s(stateMutex); failCacheCapacity(); return; }
+      // Drop least-recent ordinary requests first, never the current owner.
+      bool reduced=false;
+      { Lock s(stateMutex);
+        for(size_t i=requested.size();i>0;--i) if(requested[i-1]!=activeUid.c_str()) {
+          requested.erase(requested.begin()+i-1); reduced=true; break;
+        }
+        if(!reduced) failCacheCapacity();
+      }
+      if(reduced) continue;
+    }
+    refreshNeeded=true; return;
   }
   if (deviceBlocked) {
     deviceBlocked = false;

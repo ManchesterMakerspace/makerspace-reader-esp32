@@ -1,6 +1,7 @@
 #include "FlashProfile.h"
 #include "CacheKey.h"
 #include "Reader.h"
+#include "ReservationConfig.h"
 #include "secrets.h"
 #include <LittleFS.h>
 #include <esp_partition.h>
@@ -198,7 +199,12 @@ bool sealWrite(const String &path, const String &data, bool critical) {
 bool sealRead(const String &path, String &data, bool critical) {
   Lock lock(fsMutex);
   File f = LittleFS.open(path, "r");
-  if (!f || f.size() < 28 || f.size() > 524288)
+  size_t ceiling=524288;
+  if(path=="/state0" || path=="/state1") ceiling=readerProfile::snapshotBytes+28;
+#if READER_ENABLE_RESERVATIONS
+  if(path=="/reservations") ceiling=readerBoard::reservationJournalBytes+28;
+#endif
+  if (!f || f.size() < 28 || f.size() > ceiling)
     return cacheFailure(path, "open/read size validation", critical);
   uint8_t iv[12], tag[16];
   if (!cacheKeyReady)

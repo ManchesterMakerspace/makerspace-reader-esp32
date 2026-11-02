@@ -3,6 +3,15 @@
 #include <iostream>
 using namespace connectivity;
 int main() {
+ for(const char *path:{"/config","/config/"}) {
+  assert(connectivity::configTransportAllowed(path,true,false,false,true,false,false,true));
+  assert(!connectivity::configTransportAllowed(path,false,true,false,true,false,false,true));
+  assert(connectivity::configTransportAllowed(path,false,true,true,true,false,false,true));
+  assert(!connectivity::configTransportAllowed(path,false,true,true,true,false,false,false));
+ }
+ for(const char *path:{"/config/extra","/provision","/api/local/provision","/recovery","/api/local/recovery"})
+  assert(!connectivity::configTransportAllowed(path,false,true,true,true,false,false,true));
+
  Policy p;
  auto a=p.step(0,false,false,false,true,false,false); assert(a.startWifi && !a.stopWifi);
  a=p.step(29999,false,false,false,true,true,false);assert(!a.startWifi && !a.retryEthernet);

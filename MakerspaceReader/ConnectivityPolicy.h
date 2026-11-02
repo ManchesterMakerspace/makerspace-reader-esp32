@@ -46,6 +46,11 @@ inline bool provisioningPath(const char *p) {
          !std::strncmp(p, "/api/local/provision", 20) || !std::strncmp(p, "/recovery", 9) ||
          !std::strncmp(p, "/api/local/recovery", 19);
 }
+inline bool configPage(const char *p) { return !std::strcmp(p,"/config") || !std::strcmp(p,"/config/"); }
+inline bool configTransportAllowed(const char *path,bool read,bool write,bool wifiConfig,bool radio,bool ethernetReady,bool receivedOnEthernet,bool receivedOnStation) {
+ if(configPage(path) && (read || (write && wifiConfig && radio && receivedOnStation))) return true;
+ return !provisioningPath(path) || (!radio && ethernetReady && receivedOnEthernet);
+}
 inline bool manualProvisioningAllowed(bool radio, bool ethernetReady, bool receivedOnEthernet) {
   return !radio && ethernetReady && receivedOnEthernet;
 }

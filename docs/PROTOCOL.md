@@ -29,7 +29,7 @@ Enrollment transactions write fences on both the reader and assigned card, so co
 
 ## NFC transport selection and IRQ
 
-PN7160 at 0x28 has priority. If it is absent, the station selects PN532 at 0x24; GPIO17/18 are shared alternative IRQ/reset connections, so install one module. A failing controller cannot authorize a card. Controller selection and health appear separately in authenticated statistics.
+PN7160 at 0x28 has priority. If it is absent, the station selects PN532 at 0x24; the board header supplies shared alternative IRQ/reset connections, so install one module. A failing controller cannot authorize a card. Controller selection and health appear separately in authenticated statistics.
 
 PN7160 rising IRQ wakes the NFC task; it checks HIGH before calling discovery or reading a response. PN532 falling IRQ indicates ready data and is checked LOW before every read. Both paths check levels before sleeping and after acquiring the I2C lock, so an already-asserted line is serviced without waiting for another edge. The ISR only sends a task notification. The 100 ms idle timeout updates removal/maintenance state without an NFC I2C read.
 
@@ -39,7 +39,7 @@ Both transports authenticate sector 1 with Key A, read the credential and traile
 
 ## Cache choice
 
-RAM unordered_maps provide UID-to-key/expiry/card and member-to-tool-grant lookups. Maximums are 300 cards and 150 grants. The maximum-size fixture uses **211,315 bytes** of MessagePack; realistic shorter names use less. LittleFS snapshots avoid SQLite overhead and hundreds of separately allocated flash files. NVS holds counters, small configuration markers and the generated 32-byte device cache key.
+RAM unordered_maps provide UID-to-key/expiry/card and member-to-tool-grant lookups. Board limits are 32/32 without PSRAM, 64/64 on 4 MB PSRAM profiles, and 300/150 on larger PSRAM profiles. The maximum-size fixture uses **211,315 bytes** of MessagePack; realistic shorter names use less. LittleFS snapshots avoid SQLite overhead and hundreds of separately allocated flash files. NVS holds counters, small configuration markers and the generated 32-byte device cache key.
 
 Each snapshot contains configuration, cards, FirstScan, and grants. AES-256-GCM uses a unique device cache key, a nonce reserved durably in NVS before encryption, and the pathname as associated data. The next snapshot is written via a temporary file to the inactive generation, read back and authenticated, then selected with a durable NVS generation counter. At startup only that committed generation is loaded; a corrupted current snapshot never silently rolls back revoked permissions.
 
@@ -231,3 +231,32 @@ Bench commissioning sequence:
 Compact scoped refreshes request the retained ordinary cards and active owner; the gateway always includes the eligible privileged set. A lookup that completes after the request UID list is captured retains both its unrequested card and its grant. Requested-card removals and newer authoritative grants still take precedence, and grants never carry across a tool/role change.
 
 Cache capacity failures are reported separately as `cacheCapacityExceeded` in Statistics JSON and do not enter OTA maintenance mode. Synchronization continues so correcting the eligible set at the gateway can restore operation. New admissions are denied while this error is set; an otherwise valid active owner can still log off and a valid privileged card can still kick. Saves exceeding profile card, grant or serialized-byte limits leave the previous snapshot and generation intact. The error clears after a fitting authoritative snapshot has been written and read back successfully; ordinary scan saves cannot clear it.
+
+## Bounded board-profile synchronization
+
+Recent snapshot POSTs accept optional integer `cardLimit` (1..300),
+`checkoutLimit` (1..150), and `responseBytes` (1..524288). Defaults remain
+128/128/524288 for older recent-snapshot clients. Full snapshots retain their
+300/150 defaults. All eligible privileged cards remain mandatory. The API returns
+409 with the existing card/checkout capacity messages or
+`Snapshot response byte capacity exceeded`; it never truncates authorization data.
+Firmware budgets the request around known privileged records, reduces least-recent
+ordinary requests on capacity conflicts, and preserves the active owner's request.
+Mandatory records that cannot fit retain the existing capacity failure policy.
+HTTP Content-Length and encrypted-file length are checked before payload allocation;
+decoded counts are checked before merging. Unknown-length responses are rejected.
+
+Reservations accept `hours=8&limit=16` with a seventeenth-row lookahead; defaults
+remain four hours / 32 rows. Bounds are inclusive at the horizon and exclusive at
+reservation end. Scope and approved-status filtering remain server-controlled;
+whole-shop and expanded group bookings remain applicable. Projections omit titles.
+See RESERVATIONS.md for durable reference budgets and the persistent coverage-gap
+marker used when a reduced profile cannot capture attendance. Deploy these API
+options before the dependent firmware. No new server environment variables or
+indexes are required; the existing tool/shop status/time indexes serve both horizons.
+
+Authenticated `/config` now includes read-only hardware diagnostics from the same
+board settings and inventory used by drivers. GET never probes I2C. Only QT Py
+permits configuration POSTs over its station Wi-Fi; authentication, CSRF, idle-relay
+and server approval remain required. Other provisioning/recovery routes and
+Ethernet-board writes retain their previous transport restrictions.

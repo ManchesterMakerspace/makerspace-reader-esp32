@@ -4,6 +4,20 @@ Push-Location $readerRoot
 try {
  & (Join-Path $readerRoot 'tests/flash-profile.ps1')
  New-Item -ItemType Directory -Force .test-build | Out-Null
+ foreach ($board in @(1,2,3)) {
+  & g++ -std=c++11 -Wall -Wextra -Werror "-DREADER_BOARD=$board" -DREADER_PROFILE_MB=4 tests/board-config.cpp -o .test-build/board-config.exe
+  if($LASTEXITCODE -ne 0) {throw 'Board selection compilation failed'}
+  & ./.test-build/board-config.exe
+  if($LASTEXITCODE -ne 0) {throw 'Board budget/pin tests failed'}
+ }
+ Copy-Item MakerspaceReader/HardwareDiagnostics.cpp .test-build/HardwareDiagnostics.cpp -Force
+ foreach ($board in @(1,2,3)) { foreach ($feature in @(0,1)) {
+  [string[]]$targetFlags=if($board -eq 2) {@('-DCONFIG_IDF_TARGET_ESP32')} else {@('-DCONFIG_IDF_TARGET_ESP32S3','-DBOARD_HAS_PSRAM')}
+  & g++ -std=c++11 -Wall -Wextra -Werror -DARDUINO=1 "-DREADER_BOARD=$board" "-DREADER_ENABLE_RESERVATIONS=$feature" @targetFlags -I tests/hardware-fakes -I tests/board-fakes -I MakerspaceReader tests/hardware.cpp .test-build/HardwareDiagnostics.cpp -o .test-build/hardware-tests.exe
+  if($LASTEXITCODE -ne 0) {throw 'Hardware diagnostic compilation failed'}
+  & ./.test-build/hardware-tests.exe
+  if($LASTEXITCODE -ne 0) {throw 'Hardware diagnostic tests failed'}
+ }}
  & g++ -std=c++11 -Wall -Wextra -Werror tests/reservations.cpp MakerspaceReader/Reservation.cpp -o .test-build/reservation-tests.exe
  if ($LASTEXITCODE -ne 0) { throw 'Reservation test compilation failed' }
  & ./.test-build/reservation-tests.exe
@@ -17,21 +31,26 @@ try {
  & ./.test-build/connectivity-tests.exe
  if ($LASTEXITCODE -ne 0) { throw 'Connectivity tests failed' }
  Copy-Item MakerspaceReader/Connectivity.cpp .test-build/Connectivity.cpp -Force
+ & (Join-Path $readerRoot 'tests/board-selection.ps1')
+ foreach ($board in @(1,2,3)) {
  foreach ($wifiOption in @('-DTEST_WIFI', '-DTEST_ETHERNET_ONLY')) {
-  & g++ -std=c++11 -Wall -Wextra -Werror -DREADER_PROFILE_MB=4 $wifiOption -I tests/connectivity-fakes -I MakerspaceReader tests/connectivity-service.cpp -o .test-build/connectivity-service.exe
+  if($board -eq 3 -and $wifiOption -eq '-DTEST_ETHERNET_ONLY') {continue}
+  & g++ -std=c++11 -Wall -Wextra -Werror "-DREADER_BOARD=$board" -DREADER_PROFILE_MB=4 $wifiOption -I tests/connectivity-fakes -I MakerspaceReader tests/connectivity-service.cpp -o .test-build/connectivity-service.exe
   if ($LASTEXITCODE -ne 0) { throw 'Connectivity service compilation failed' }
   & ./.test-build/connectivity-service.exe
   if ($LASTEXITCODE -ne 0) { throw 'Connectivity service tests failed' }
  }
+ }
  foreach ($cacheSource in @('CachePolicy','CacheRefresh','CacheSnapshot')) {
   Copy-Item "MakerspaceReader/$cacheSource.cpp" ".test-build/$cacheSource.cpp" -Force
  }
- foreach ($profileMB in @(4,8,16)) {
-  & g++ -std=c++11 -Wall -Wextra -Werror "-DREADER_PROFILE_MB=$profileMB" -I tests/cache-fakes -I MakerspaceReader -I .arduino/libraries/ArduinoJson/src tests/cache-policy.cpp .test-build/CachePolicy.cpp .test-build/CacheRefresh.cpp .test-build/CacheSnapshot.cpp -o .test-build/cache-policy.exe
+ foreach ($cacheCase in @(@(1,4),@(1,8),@(1,16),@(2,4),@(3,4))) {
+  $board=$cacheCase[0]; $profileMB=$cacheCase[1]
+  & g++ -std=c++11 -Wall -Wextra -Werror "-DREADER_BOARD=$board" "-DREADER_PROFILE_MB=$profileMB" -I tests/cache-fakes -I MakerspaceReader -I .arduino/libraries/ArduinoJson/src tests/cache-policy.cpp .test-build/CachePolicy.cpp .test-build/CacheRefresh.cpp .test-build/CacheSnapshot.cpp -o .test-build/cache-policy.exe
   if ($LASTEXITCODE -ne 0) { throw 'Cache policy compilation failed' }
   & ./.test-build/cache-policy.exe
   if ($LASTEXITCODE -ne 0) { throw 'Cache policy tests failed' }
-  & g++ -std=c++11 "-DREADER_PROFILE_MB=$profileMB" -I .arduino/libraries/ArduinoJson/src tests/cache-size.cpp -o .test-build/cache-profile-size.exe
+  & g++ -std=c++11 "-DREADER_BOARD=$board" "-DREADER_PROFILE_MB=$profileMB" -I .arduino/libraries/ArduinoJson/src tests/cache-size.cpp -o .test-build/cache-profile-size.exe
   if ($LASTEXITCODE -ne 0) { throw 'Profile size compilation failed' }
   & ./.test-build/cache-profile-size.exe
   if ($LASTEXITCODE -ne 0) { throw 'Profile size tests failed' }
@@ -48,10 +67,12 @@ try {
  Copy-Item MakerspaceReader/AudioService.cpp .test-build/AudioService.cpp -Force
  Copy-Item MakerspaceReader/ReservationService.cpp .test-build/ReservationService.cpp -Force
  Copy-Item MakerspaceReader/ReservationService.h .test-build/ReservationService.h -Force
- & g++ -std=c++11 -Wall -Wextra -Werror -I tests/reservation-fakes -I MakerspaceReader -I .arduino/libraries/ArduinoJson/src tests/reservation-service.cpp MakerspaceReader/Reservation.cpp -o .test-build/reservation-service.exe
+ foreach ($reservationBoard in @(1,2)) {
+ & g++ -std=c++11 -Wall -Wextra -Werror "-DREADER_BOARD=$reservationBoard" -I tests/reservation-fakes -I MakerspaceReader -I .arduino/libraries/ArduinoJson/src tests/reservation-service.cpp MakerspaceReader/Reservation.cpp -o .test-build/reservation-service.exe
  if($LASTEXITCODE -ne 0){throw 'Reservation service compilation failed'}
  & ./.test-build/reservation-service.exe
  if($LASTEXITCODE -ne 0){throw 'Reservation service tests failed'}
+ }
  & g++ -std=c++11 -Wall -Wextra -Werror -I tests/audio-fakes -I MakerspaceReader tests/audio-service.cpp .test-build/AudioService.cpp MakerspaceReader/Audio.cpp -o .test-build/audio-service-tests.exe
  if($LASTEXITCODE -ne 0){throw 'Audio service test compilation failed'}
  & ./.test-build/audio-service-tests.exe
@@ -83,7 +104,7 @@ try {
  }
  # Compile the production relay implementation with hardware/state test doubles.
  Copy-Item MakerspaceReader/Relay.cpp .test-build/Relay.cpp -Force
- & g++ -std=c++11 -Wall -Wextra -Werror -I tests/relay-fakes tests/relay.cpp .test-build/Relay.cpp -o .test-build/relay-tests.exe
+ & g++ -std=c++11 -Wall -Wextra -Werror -I tests/relay-fakes -I MakerspaceReader tests/relay.cpp .test-build/Relay.cpp -o .test-build/relay-tests.exe
  if($LASTEXITCODE -ne 0){throw 'Relay test compilation failed'}
  & ./.test-build/relay-tests.exe
  if($LASTEXITCODE -ne 0){throw 'Relay tests failed'}

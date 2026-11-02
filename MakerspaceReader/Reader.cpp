@@ -1,3 +1,4 @@
+#include "HardwareDiagnostics.h"
 #include "Connectivity.h"
 #include "BuildInfo.h"
 #include "Reader.h"
@@ -6,11 +7,13 @@
 #include "Audio.h"
 #include "Policy.h"
 #include "secrets.h"
-#include <ETH.h>
+
 #include <ElegantOTA.h>
 #include <LittleFS.h>
 #include <RTClib.h>
+#if READER_ETHERNET_SPI
 #include <SPI.h>
+#endif
 #include <Wire.h>
 #include <bootloader_random.h>
 #include <esp_flash_encrypt.h>
@@ -101,8 +104,8 @@ static void relayTask(void *) {
 }
 void readerSetup() {
   pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, LOW);
-  Serial.begin(115200);
+  digitalWrite(RELAY_PIN, readerBoard::relayOff);
+  Serial.begin(readerBoard::serialBaud);
   Serial.setDebugOutput(true);
   stateMutex = xSemaphoreCreateMutex();
   fsMutex = xSemaphoreCreateMutex();
@@ -120,11 +123,15 @@ void readerSetup() {
   productionReady = esp_flash_encryption_enabled() && esp_secure_boot_enabled();
 #endif
 #endif
+  if(!readerBoard::memoryCompatible(ESP.getFlashChipSize(),ESP.getPsramSize())) {
+    productionReady=false; maintenance=true;
+    Serial.println("Board flash/PSRAM mismatch; tool access disabled");
+  }
   if (!checkFlashLayout()) {
     productionReady = false; maintenance = true;
     lastError = "Firmware flash profile does not match installed partitions";
     log_e("Firmware flash profile does not match installed partitions");
-  } else initializeStorage();
+  } else if(productionReady) initializeStorage();
   if (cacheKeyReady) { restoreToolStatus(); recoverToolSession(); }
 #if READER_ENABLE_RESERVATIONS
   if (cacheKeyReady) { reservation::setup(); reservation::recoverSessionEnd(); }
@@ -134,11 +141,14 @@ void readerSetup() {
     configuration["role"] = "test";
     configuration["enrollmentEnabled"] = false;
   }
-  if (!Wire.begin(1, 2))
-    log_e("I2C bus initialization failed (SDA=1, SCL=2)");
-  Wire.setClock(100000);
-  Wire.setTimeOut(50);
-  rtcPresent = rtc.begin(&Wire);
+  const bool busReady=Wire.begin(readerBoard::sda, readerBoard::scl);
+  if (!busReady)
+    log_e("I2C bus initialization failed (SDA=%d, SCL=%d)", readerBoard::sda, readerBoard::scl);
+  Wire.setClock(readerBoard::i2cHz);
+  Wire.setTimeOut(readerBoard::i2cTimeoutMs);
+  hardwareProbe(busReady);
+  rtcPresent = busReady && rtc.begin(&Wire);
+  hardwareInitialized(0x68, rtcPresent);
   if (rtcPresent)
     log_i("I2C device found: PCF8523 RTC at 0x68");
   if (rtcPresent && rtc.initialized() && !rtc.lostPower()) {
@@ -147,7 +157,9 @@ void readerSetup() {
       trustTime(t);
     }
   }
-  SPI.begin(13, 12, 11);
+  #if READER_ETHERNET_SPI
+  SPI.begin(readerBoard::sclk, readerBoard::miso, readerBoard::mosi);
+#endif
   connectivitySetup();
   if (!clockTrusted)
     configTime(0, 0, "pool.ntp.org",

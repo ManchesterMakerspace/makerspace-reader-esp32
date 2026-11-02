@@ -12,6 +12,7 @@ std::atomic<uint32_t> dropped(0);
 int stateMutex=1,fsMutex=2,held=0;
 std::map<std::string,std::string> flash;
 FakeFS LittleFS;
+Preferences prefs;
 int64_t utc=1800000000000LL,mono=1000;
 int requests=0,reads=0;
 std::vector<std::string> uploads;
@@ -45,12 +46,12 @@ static void advance(int64_t ms=61000){utc+=ms;mono+=ms;}
 static void boot(){
   using namespace reservation;
   model.reset();journal.clear();tracked.clear();associations.clear();topics.clear();warningTargets.clear();cueTargets.clear();alertSession.clear();
-  scope="";uncertain=false;eligible=true;loaded=freshJournal=false;coveredFrom=evaluatedThrough=checkedAt=0;
+  scope="";journalBlocked=false;coverageGap=false;journalAtCapacity=false;uncertain=false;eligible=true;loaded=freshJournal=false;coveredFrom=evaluatedThrough=checkedAt=0;
   nextNetwork=0;retryMs=1000;hinted=true;active={};setup();service();
 }
 static void seed(bool reservable=true){
   serverMonitored=true;serverArrival=0;
-  flash.clear();uploads.clear();failStorage=offline=loseAck=false;dropped=0;clockTrusted=true;advance();
+  flash.clear();prefs.gap=false;uploads.clear();failStorage=offline=loseAck=false;dropped=0;clockTrusted=true;advance();
   configuration.clear();configuration["role"]="tool";configuration["toolId"]="bbbbbbbbbbbbbbbbbbbbbbbb";
   inventory.clear();inventory["toolId"]=configuration["toolId"];inventory["reservable"]=reservable;
   inventory["snapshotAt"]=utc;inventory["complete"]=true;
@@ -61,6 +62,19 @@ static void seed(bool reservable=true){
 }
 int main(){
   using namespace reservation;
+  seed(); flash["/reservations"]=std::string(readerBoard::reservationJournalBytes+1,'x');
+  const auto oversized=flash["/reservations"]; boot();
+  assert(journalBlocked && uncertain); service(); network(); assert(!save());
+  assert(flash["/reservations"]==oversized);
+  JsonDocument gapEnding; assert(sessionEnded(gapEnding.as<JsonVariantConst>(),utc)); assert(prefs.gap);
+  assert(flash["/reservations"]==oversized);
+  seed(); inventory["complete"]=false;
+  auto base=inventory["reservations"][0].as<JsonObject>(); JsonDocument copied; copied.set(base);
+  for(unsigned i=1;i<16;++i) { auto r=inventory["reservations"].as<JsonArray>().add<JsonObject>(); r.set(copied.as<JsonObjectConst>()); r["id"]=std::string(22,'e')+(i<10?"0":"")+std::to_string(i); }
+  refreshHint();advance();network();assert(model.records.size()==16 && !model.complete);
+  // No local absence inference while the server's seventeenth row signals overflow.
+  active={"cccccccccccccccccccccccc","dddddddddddddddddddddddd",utc};service();assert(journal["operations"].size()==0);
+
   seed();active={"cccccccccccccccccccccccc","dddddddddddddddddddddddd",utc};
   int before=requests;service();assert(requests==before); // Session loop never waits on API.
   assert(journal["operations"].size()==1 && tracked[0].arrived==active.started && model.view(utc).own);
@@ -178,9 +192,9 @@ int main(){
   // visit by the same member cannot steal that association during retries.
   seed();int64_t deferredStart=utc;ending["time"]=utc+1000;
   assert(sessionEnded(ending.as<JsonVariantConst>(),deferredStart));
-  for(int i=0;i<64;++i) {JsonDocument op;op["kind"]="release";op["checkendId"]=i;assert(queue(op));}
+  for(int i=0;i<int(readerBoard::reservationOperations);++i) {JsonDocument op;op["kind"]="release";op["checkendId"]=i;assert(queue(op));}
   active={"ffffffffffffffffffffffff","dddddddddddddddddddddddd",utc};advance(1000);service();
-  assert(journal["endings"].size()==1 && tracked[0].associatedSession==String(ending["checkinId"] | "").c_str());
+  assert(journal["endings"].size()==1 && tracked[0].associatedSession.empty());
   boot();assert(journal["endings"].size()==1);
   journal["releases"].as<JsonArray>().clear();assert(save()); // Simulate draining the release backlog.
   model.complete=true;advance(1000);service();
@@ -188,7 +202,7 @@ int main(){
 
   // A full claim queue must not persist an arrival without its operation.
   seed();
-  for(int i=0;i<64;++i) {JsonDocument op;op["kind"]="claim";op["observedAt"]=i;assert(queue(op));}
+  for(int i=0;i<int(readerBoard::reservationOperations);++i) {JsonDocument op;op["kind"]="claim";op["observedAt"]=i;assert(queue(op));}
   ending["time"]=utc+1000;assert(sessionEnded(ending.as<JsonVariantConst>(),utc));
   active={"ffffffffffffffffffffffff","222222222222222222222222",utc};service();
   assert(journal["endings"].size()==1 && tracked[0].arrived==0);
@@ -202,41 +216,38 @@ int main(){
   seed();
   Record old=tracked[0];old.start=utc-hour;old.end=utc-1;
   tracked.clear();
-  for(int i=0;i<64;++i) {old.id=std::string(22,'1')+(i<10 ? "0" : "")+std::to_string(i);tracked.push_back(old);}
+  for(int i=0;i<int(readerBoard::reservationOperations);++i) {old.id=std::string(22,'1')+(i<10 ? "0" : "")+std::to_string(i);tracked.push_back(old);}
   assert(save());
   inventory["reservations"][0]["id"]="999999999999999999999999";
   refreshHint();advance(1000);network();
-  assert(tracked.size()==capacity && !tracking("999999999999999999999999"));
+  assert(tracked.size()==readerBoard::reservationReferences && !tracking("999999999999999999999999"));
   active={"cccccccccccccccccccccccc","dddddddddddddddddddddddd",utc};service();
-  assert(associations.size()==1 && associations[0].associatedSession==active.id);
-  JsonDocument durable;assert(!deserializeJson(durable,flash["/reservations"]));
-  assert(durable["operations"].size()==1 && durable["associations"][0]["associatedSession"]==active.id);
-  advance(1000);network();assert(journal["operations"].size()==0);
-  advance(1000);boot();assert(associations.size()==1);
+  assert(associations.empty() && journal["operations"].size()==0 && uncertain);
   ending["time"]=utc+1000;
-  assert(sessionEnded(ending.as<JsonVariantConst>()));
-  assert(journal["releases"].size()==1 && journal["releases"][0]["reservationId"]=="999999999999999999999999");
-  advance(1000);network();assert(journal["releases"].size()==0);
+  assert(sessionEnded(ending.as<JsonVariantConst>(),utc));
+  assert(coverageGap && prefs.gap); // Capacity cannot block the next ordinary visit.
+  boot();assert(uncertain && tracked.size()==readerBoard::reservationReferences);
 
-  // A full attendance queue leaves independent durable room for logoff releases.
+  // A pending release shares the bounded operation budget and survives lost ACKs.
   seed();active={"cccccccccccccccccccccccc","dddddddddddddddddddddddd",utc};service();
-  for(int i=1;i<64;++i) {JsonDocument op;op["kind"]="claim";op["observedAt"]=i;assert(queue(op));}
+  for(int i=1;i<int(readerBoard::reservationOperations)-1;++i) {JsonDocument op;op["kind"]="claim";op["observedAt"]=i;assert(queue(op));}
   ending["time"]=utc+1000;
   assert(sessionEnded(ending.as<JsonVariantConst>()));
   assert(sessionEnded(ending.as<JsonVariantConst>())); // Replays cannot duplicate the release.
-  assert(journal["operations"].size()==64 && journal["releases"].size()==1 && tracked[0].released);
-  JsonDocument statistics;stats(statistics.to<JsonObject>());assert(statistics["pending"]==65);
+  assert(journal["operations"].size()==readerBoard::reservationOperations-1 && journal["releases"].size()==1 && tracked[0].released);
+  JsonDocument statistics;stats(statistics.to<JsonObject>());assert(statistics["pending"]==readerBoard::reservationOperations);
   String retainedRelease;serializeJson(journal["releases"][0],retainedRelease);
   offline=true;advance();boot();network();
   assert(journal["releases"].size()==1 && tracked[0].released);
   active={"ffffffffffffffffffffffff","dddddddddddddddddddddddd",utc};service();
   offline=false;advance(); // Allow the offline retry backoff to expire.
-  for(int i=0;i<16;++i) {advance(1000);network();}
-  assert(journal["operations"].size()==0 && journal["releases"].size()==1);
+  // Simulate ACKing the claim backlog; the independent release remains durable.
+  journal["operations"].as<JsonArray>().clear(); assert(save());
+  const auto sentBefore=std::count(uploads.begin(),uploads.end(),std::string(retainedRelease));
   loseAck=true;advance(1000);network();assert(journal["releases"].size()==1);
   loseAck=false;advance(1000);boot();network();
   assert(journal["releases"].size()==0);
-  assert(std::count(uploads.begin(),uploads.end(),std::string(retainedRelease))==2);
+  assert(std::count(uploads.begin(),uploads.end(),std::string(retainedRelease))==sentBefore+2);
 
   seed(false);int readBefore=reads;advance();boot();network();assert(reads==readBefore && !eligible);
   advance(86400001);inventory["reservable"]=true;network();assert(reads==readBefore+1 && eligible);
@@ -247,16 +258,16 @@ int main(){
   failStorage=false;advance(1000);service();assert(tracked[0].arrived==active.started && journal["operations"].size()==1);
   clockTrusted=false;before=requests;advance();service();network();assert(requests==before && evaluatedThrough==0);
 
-  seed();tracked[0].start=utc-grace-1;model.records=tracked;inventory["reservations"][0]["startAt"]=tracked[0].start;flash["/events/one"]="{\"dbAck\":false}";
+  seed();tracked[0].start=utc-grace-1;model.records.assign(tracked.begin(),tracked.end());inventory["reservations"][0]["startAt"]=tracked[0].start;flash["/events/one"]="{\"dbAck\":false}";
   advance();service();uploads.clear();network();assert(uploads.empty());
   flash["/events/one"]="{\"dbAck\":true}";sessionReady=false;advance();service();network();assert(uploads.empty());
   sessionReady=true;advance();service();network();assert(!uploads.empty() && uploads.back().find("checkpoint")!=std::string::npos);
   dropped=1;advance();service();assert(uncertain);
 
-  seed();for(int i=0;i<64;++i){JsonDocument op;op["kind"]="claim";op["observedAt"]=i;assert(queue(op));}
+  seed();for(int i=0;i<int(readerBoard::reservationOperations);++i){JsonDocument op;op["kind"]="claim";op["observedAt"]=i;assert(queue(op));}
   JsonDocument extra;extra["kind"]="claim";extra["observedAt"]=65;assert(!queue(extra) && uncertain);
-  assert(journal["operations"].size()==64);
-  configuration["role"]="latch";service();assert(!enabled && model.records.empty() && journal["operations"].size()==64);
+  assert(journal["operations"].size()==readerBoard::reservationOperations);
+  configuration["role"]="latch";service();assert(!enabled && model.records.empty() && journal["operations"].size()==readerBoard::reservationOperations);
   flash["/reservations"]="broken";advance();boot();assert(uncertain);
   seed();flash["/reservations.tmp"]="interrupted write";advance();boot();assert(uncertain);
   seed();active={"cccccccccccccccccccccccc","dddddddddddddddddddddddd",utc};service();

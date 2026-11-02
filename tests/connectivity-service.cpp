@@ -18,6 +18,15 @@ static bool called(const char *call) { return std::find(calls.begin(),calls.end(
 static void tick(uint32_t elapsed=1000) { calls.clear(); testNow+=elapsed; serviceConnectivity(); }
 int main() {
   connectivitySetup();
+#if !READER_HAS_ETHERNET
+  assert(!called("eth-start") && called("wifi-begin") && !entropy);
+  WiFi.connected=true; WiFi.STA.ip=true; tick();
+  assert(networkHasIP() && networkAddress()=="192.0.2.1" && !ethernetHasIP());
+  tick(60000); assert(!called("eth-start") && !called("dhcp") && !called("wifi-off"));
+  WiFi.connected=false; WiFi.STA.ip=false; tick(60000); assert(called("wifi-begin"));
+  std::cout << "Wi-Fi-only immediate startup, reconnect and absent Ethernet passed\n";
+  return 0;
+#else
   assert(called("eth-start") && called("eth-end"));
 #ifdef TEST_WIFI
   assert(called("entropy-off") && called("wifi-on") && called("wifi-begin"));
@@ -89,6 +98,7 @@ int main() {
   WiFi.startOK=true;
   tick(30000);
   assert(called("wifi-begin") && wifiRadioActive() && !entropy);
+#endif
 #endif
   std::cout << "Production connectivity routing, retries and radio/entropy handoff passed\n";
 }
