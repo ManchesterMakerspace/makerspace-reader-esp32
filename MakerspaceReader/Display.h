@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include "ReservationConfig.h"
 
 namespace display {
 constexpr uint32_t green = 0x00ff00, red = 0xff0000, pink = 0x804040;
@@ -9,6 +10,12 @@ struct Frame {
   uint32_t color = white;
 };
 struct Status {
+#if READER_ENABLE_RESERVATIONS
+  bool reservationPresent=false, reservationCountdown=false, reservationOwn=false, reservationDue=false;
+  bool reservationFlash=false, reservationPlaying=false;
+  char reservationName[65]={};
+  int64_t reservationDeadline=0, reservationStart=0, reservationEnd=0;
+#endif
   bool net = false, api = false, mqtt = false, trusted = false;
   bool relay = false, tool = false, outOfService = false, kickPending = false, haveLast = false;
   char userName[65] = {}, lastName[70] = {};

@@ -1,0 +1,8 @@
+#pragma once
+// Set globally with -DREADER_ENABLE_RESERVATIONS=0 to omit the subsystem.
+#ifndef READER_ENABLE_RESERVATIONS
+#define READER_ENABLE_RESERVATIONS 1
+#endif
+#if READER_ENABLE_RESERVATIONS != 0 && READER_ENABLE_RESERVATIONS != 1
+#error READER_ENABLE_RESERVATIONS must be 0 or 1
+#endif

@@ -1,5 +1,8 @@
 # Reader protocol and persistent storage
 
+The optional reservation protocol and encrypted attendance journal are documented
+in [Tool reservations](RESERVATIONS.md). Reservation MQTT hints do not invalidate access.
+
 ## Meaning of “the API”
 
 The API is **ts-data-api**, the Node HTTP service in the sibling project. Its /reader/v1 routes use the official MongoDB Node driver with server-held Atlas credentials. The ESP32 never runs a MongoDB driver, stores an Atlas password, or receives permission to run arbitrary database queries.
@@ -171,6 +174,12 @@ Ordinary OTA does not migrate partitions, and startup validation
 rejects the old layout. Drain queued events and back up needed configuration and
 cache material before changing the partition table. No automatic filesystem
 migration or formatting was added.
+
+The 4 MB build script also enables C++ link-time optimization to keep combined
+Wi-Fi/reservation builds below 90% of each existing application slot. C sources
+retain the core's normal compilation settings because the panic-handler assembly
+does not support LTO. This compiler change requires no partition migration and
+does not disable features. The 8/16 MB build settings are unchanged.
 
 ## Optional Wi-Fi fallback
 

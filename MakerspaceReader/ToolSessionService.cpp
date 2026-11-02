@@ -1,6 +1,7 @@
 #include "Reader.h"
 #include "Display.h"
 #include "ToolSession.h"
+#include "ReservationService.h"
 #include "secrets.h"
 #include <esp_timer.h>
 #include <LittleFS.h>
@@ -167,6 +168,9 @@ void serviceToolSession() {
   String route=copy["route"] | "";
   if (!spoolSessionEvent(copy["start"],copy["startSequence"],"checkins","activity/checkins/"+route) ||
       !spoolSessionEvent(copy["end"],copy["endSequence"],"checkend","activity/checkends/"+route)) return;
+#if READER_ENABLE_RESERVATIONS
+  { Lock s(stateMutex); if (!reservation::sessionEnded(copy["end"],copy["start"]["time"] | int64_t(0))) return; }
+#endif
   copy["closed"]=true;
   if (!writeJournal(copy)) return;
   { Lock s(stateMutex); journal.set(copy); pendingEnd=false; }
@@ -215,3 +219,15 @@ void toolDisplayStatus(display::Status &s) {
   snprintf(s.lastName,sizeof(s.lastName),"%s %s",lastName.c_str(),lastInitial.c_str());
   s.haveLast=haveLast && String(journal["start"]["toolId"] | "") == String(configuration["toolId"] | ""); s.lastEnded=lastEnded;
 }
+#if READER_ENABLE_RESERVATIONS
+void reservation::captureSession(reservation::Session &out) {
+  if(!session.active()) return;
+  out.id=session.sessionId; out.member=session.ownerMember;
+  out.started=journal["start"]["time"] | int64_t(0);
+}
+bool reservation::attendanceReady() { return !pendingEnd && storageOK; }
+void reservation::recoverSessionEnd() {
+  Lock s(stateMutex);
+  if(!journal["end"].isNull() && !reservation::sessionEnded(journal["end"],journal["start"]["time"] | int64_t(0))) pendingEnd=true;
+}
+#endif

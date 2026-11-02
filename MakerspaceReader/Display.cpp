@@ -236,6 +236,26 @@ Frame Model::frame(const Status &s, int64_t now) {
     }
     if (top[0]) { scroll(f.row1,top,now); scroll(f.row2,bottomText,now); }
   }
+#if READER_ENABLE_RESERVATIONS
+  if (s.tool && s.reservationPresent && s.trusted && enrollment != Enrollment::running &&
+      !s.kickPending && index >= count && now >= startingUntil) {
+    if(s.relay && s.reservationCountdown) {
+      if(s.reservationDue) pad(f.row2,16,(now/4000)%2 ? "Reservation due" : "Next in 00:00:00");
+      else {
+        int64_t seconds=std::max<int64_t>(0,(s.reservationDeadline-s.utcMs+999)/1000);
+        unsigned hours=unsigned(std::min<int64_t>(99,seconds/3600));
+        char line[24]; std::snprintf(line,sizeof(line),"%s in %02u:%02u:%02u",s.reservationOwn ? "Ends" : "Next",hours,unsigned(seconds/60%60),unsigned(seconds%60));
+        pad(f.row2,16,line);
+      }
+    } else if(!s.relay && (now/8000)%2) {
+      char line[100], start[6], end[6]; newYorkClock(s.reservationStart,start); newYorkClock(s.reservationEnd,end);
+      std::snprintf(line,sizeof(line),"%s: %s",s.reservationStart<=s.utcMs ? "Now" : "Next",s.reservationName);
+      scroll(f.row1,line,now);
+      std::snprintf(line,sizeof(line),"%s-%s",start,end); pad(f.row2,16,line);
+    }
+  }
+  if(s.reservationFlash || s.reservationPlaying) f.color=red;
+#endif
   if (s.outOfService) {
     f.color=red;
     if ((now/3000)%2) pad(f.row2,16,"OUT OF SERVICE");

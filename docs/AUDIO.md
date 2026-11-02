@@ -1,5 +1,16 @@
 # Asynchronous buzzer melodies
 
+With `READER_ENABLE_RESERVATIONS=1`, `playReservation` schedules lower-priority
+reservation scores. Scan feedback pauses/resumes them, `cancelReservation` discards
+obsolete work, and `reservationPlaying` reports actual background playback for the
+red display override. See [Tool reservations](RESERVATIONS.md). The existing `play`
+API still replaces foreground feedback immediately.
+
+The reservation scores are `DonkeyKongStart` (the classic arcade Game Start cue,
+about 5.2 seconds) and `Jeopardy` (a single-tone Think! arrangement). Both tables
+are omitted when reservations are disabled. The original game-start phrase and
+trill are adapted from [this MIDI reference](https://themushroomkingdom.net/sounds/mid/dk_gamestart.mid).
+
 Audio is optional and uses the SparkFun Qwiic buzzer at I2C address 0x34. The driver owns note duration; the ESP32 schedules note starts, gaps and cancellation. There are no melody delays in the main loop or NFC task.
 
 ## Feedback and API

@@ -4,6 +4,7 @@
 #include "RefreshConfig.h"
 #include "EventOrder.h"
 #include "Reader.h"
+#include "ReservationService.h"
 #include "secrets.h"
 #include <ETH.h>
 #include <HTTPClient.h>
@@ -23,6 +24,9 @@ static uint32_t lastRefresh = 0;
 static std::unordered_map<int, String> inFlight;
 static std::unordered_map<int, uint32_t> inFlightAt;
 static std::atomic<bool> mqttStarted(false);
+#if READER_ENABLE_RESERVATIONS
+static std::atomic<uint32_t> reservationConnection(0);
+#endif
 bool api(const String &path, JsonDocument &response, const String &body) {
   Lock l(apiMutex);
   const uint32_t statusRevision=toolStatusRevision.load();
@@ -48,9 +52,13 @@ bool api(const String &path, JsonDocument &response, const String &body) {
   http.addHeader("Content-Type", "application/json");
   int code = body.length() ? http.POST(body) : http.GET();
   bool ok = false, capacityFailure = false;
-  if (code == 200 && http.getSize() >= 0 && http.getSize() <= 524288) {
+  int maxResponse = 524288;
+#if READER_ENABLE_RESERVATIONS
+  if(path.startsWith("/reader/v1/reservations")) maxResponse=16384;
+#endif
+  if (code == 200 && http.getSize() >= 0 && http.getSize() <= maxResponse) {
     String raw = http.getString();
-    if (raw.length() <= 524288)
+    if (raw.length() <= size_t(maxResponse))
       ok = !deserializeJson(response, raw);
   }
   if (code == 409 && http.getSize() >= 0 && http.getSize() <= 4096) {
@@ -292,6 +300,10 @@ static void mqttEvent(void *, esp_event_base_t, int32_t id, void *data) {
     esp_mqtt_client_subscribe(mqtt, "readers/all/refresh", 1);
     esp_mqtt_client_subscribe(mqtt, "tools/#", 1);
     esp_mqtt_client_subscribe(mqtt, "shops/#", 1);
+#if READER_ENABLE_RESERVATIONS
+    ++reservationConnection;
+    reservation::refreshHint();
+#endif
     refreshNeeded = true;
   }
   if (id == MQTT_EVENT_DISCONNECTED) {
@@ -327,6 +339,11 @@ static void mqttEvent(void *, esp_event_base_t, int32_t id, void *data) {
     mqttFragment += String(e->data, e->data_len);
     if (mqttFragment.length() != size_t(e->total_data_len))
       return;
+#if READER_ENABLE_RESERVATIONS
+    if(mqttTopic=="readers/all/reservations/refresh" || mqttTopic.startsWith("reservations/")) {
+      reservation::refreshHint(); return;
+    }
+#endif
     if (mqttTopic.startsWith("tools/") || mqttTopic.startsWith("shops/")) {
       int start = mqttFragment.indexOf('{');
       JsonDocument hint;
@@ -342,7 +359,13 @@ static void mqttEvent(void *, esp_event_base_t, int32_t id, void *data) {
       }
       return;
     }
-    if (mqttTopic == "readers/all/refresh") { refreshNeeded=true; return; }
+    if (mqttTopic == "readers/all/refresh") {
+      refreshNeeded=true;
+#if READER_ENABLE_RESERVATIONS
+      reservation::refreshHint();
+#endif
+      return;
+    }
     if (mqttTopic == "readers/all/invalidate") {
       refreshNeeded = true;
       Lock s(stateMutex);
@@ -524,6 +547,25 @@ void networkTask(void *) {
         backoff = apiOK ? 1000 : std::min(backoff * 2, uint32_t(60000));
         next = millis() + backoff;
       }
+#if READER_ENABLE_RESERVATIONS
+      if (!maintenance) reservation::network();
+      static std::vector<String> reservationTopics;
+      static uint32_t reservationGeneration=0;
+      if(reservationGeneration!=reservationConnection.load()) {
+        reservationGeneration=reservationConnection.load(); reservationTopics.clear();
+      }
+      if(mqttOK) {
+        auto desired=reservation::hintTopics();
+        if(reservation::subscribing()) desired.push_back("readers/all/reservations/refresh");
+        for(const auto &topic:reservationTopics) {
+          if(std::find(desired.begin(),desired.end(),topic)==desired.end()) esp_mqtt_client_unsubscribe(mqtt,topic.c_str());
+        }
+        for(const auto &topic:desired) {
+          if(std::find(reservationTopics.begin(),reservationTopics.end(),topic)==reservationTopics.end()) esp_mqtt_client_subscribe(mqtt,topic.c_str(),1);
+        }
+        reservationTopics=std::move(desired);
+      }
+#endif
     }
     vTaskDelay(pdMS_TO_TICKS(200));
   }

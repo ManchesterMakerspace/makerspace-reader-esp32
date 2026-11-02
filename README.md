@@ -1,5 +1,8 @@
 # Makerspace reader ESP32
 
+Optional Tool-mode reservation attendance, countdowns, warnings and compile-out
+instructions are in [Tool reservations](docs/RESERVATIONS.md).
+
 Arduino IDE firmware for Waveshare ESP32-S3-ETH (16 MB flash / OPI PSRAM), Elechouse PN7160 (or PN532 I2C fallback), and the companion ts-data-api service. The implementation supports authenticated card enrollment and scans, all five relay roles, Ethernet HTTPS/MQTTS, offline caches and audit replay, optional I2C peripherals, authenticated management pages, and ElegantOTA.
 
 [PLAN.md](PLAN.md) is the raw Markdown plan. [Commissioning](docs/COMMISSIONING.md) lists mandatory hardware verification. [Protocol and storage](docs/PROTOCOL.md) explains the data contracts and failure behavior.

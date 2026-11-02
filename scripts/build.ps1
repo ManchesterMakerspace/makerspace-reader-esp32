@@ -1,6 +1,7 @@
 param(
  [string]$Fqbn = 'esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,PartitionScheme=custom,DebugLevel=info',
  [string[]]$BuildProperties = @(),
+ [ValidateSet(0,1)][int]$Reservations = 1,
  [switch]$DescribeOnly
 )
 $ErrorActionPreference = 'Stop'
@@ -15,7 +16,22 @@ try {
  if ($flash.Count -ne 1) { throw 'Missing or ambiguous build.flash_size' }
  $profile = Get-ReaderFlashProfile ($flash[0].Substring('build.flash_size='.Length).Trim())
  if ($DescribeOnly) { $profile; return }
- $output = Join-Path $readerRoot ('build/profile-' + $profile.ProfileMB)
+ if ($profile.ProfileMB -eq 4) {
+  # Cross-file C++ optimization keeps Wi-Fi + reservations within the OTA budget.
+  # Leave C sources alone: the core's panic-handler assembly is incompatible with LTO.
+  # Use plain -flto to override the SDK link recipe's -fno-lto (-flto=auto does not).
+  foreach ($setting in @(
+   @('compiler.cpp.extra_flags', '-flto'),
+   @('compiler.c.elf.extra_flags', '-flto -Os')
+  )) {
+   $prefix = $setting[0] + '='
+   $existing = @($resolved | Where-Object { $_.StartsWith($prefix) })
+   if ($existing.Count -ne 1) { throw "Missing or ambiguous $($setting[0])" }
+   $extra += @('--build-property', ($existing[0] + ' ' + $setting[1]))
+  }
+ }
+ $suffix = if ($Reservations -eq 0) {'-no-reservations'} else {''}
+ $output = Join-Path $readerRoot ('build/profile-' + $profile.ProfileMB + $suffix)
  $source = Join-Path $output 'source/MakerspaceReader'
  New-Item -ItemType Directory -Force $source | Out-Null
  # Synchronize only this generated sketch; remove stale generated source files.
@@ -31,6 +47,7 @@ try {
 "
  [IO.File]::WriteAllText((Join-Path $source 'BuildMetadata.h'), $metadata)
  $flags = '-DREADER_CONFIGURED_FLASH_BYTES=' + $profile.ConfiguredBytes + 'ULL -DREADER_PROFILE_MB=' + $profile.ProfileMB
+ $flags += ' -DREADER_ENABLE_RESERVATIONS=' + $Reservations
  $options = Join-Path $source 'build_opt.h'
  [IO.File]::AppendAllText($options, "
 " + $flags + "
@@ -39,6 +56,22 @@ try {
  & arduino-cli --config-file arduino-cli.yaml compile --jobs 4 --fqbn $Fqbn @extra --build-property ('build.flash_size=' + $profile.ProfileMB + 'MB') --build-property ('upload.maximum_size=' + $profile.SlotBytes) --build-path $compiled $source
  if ($LASTEXITCODE -ne 0) { throw 'Firmware compilation failed' }
  $binary = Get-Item (Join-Path $compiled 'MakerspaceReader.ino.bin')
- if ($binary.Length -gt [math]::Floor($profile.SlotBytes * 0.9)) { throw 'Firmware must leave at least 10% OTA slot headroom' }
+ $budget = [long][math]::Floor($profile.SlotBytes * 0.9)
+ $headroom = 100 * ($profile.SlotBytes - $binary.Length) / $profile.SlotBytes
+ Write-Output ('Application: {0:N0} bytes; OTA slot: {1:N0} bytes; headroom: {2:N2}%; 10% headroom budget: {3:N0} bytes' -f $binary.Length, $profile.SlotBytes, $headroom, $budget)
+ if ($binary.Length -gt $budget) {
+  throw ('Firmware must leave at least 10% OTA slot headroom: {0:N0} bytes exceeds the {1:N0}-byte budget by {2:N0} bytes (flash={3} MB, reservations={4})' -f $binary.Length, $budget, ($binary.Length - $budget), $profile.ProfileMB, $Reservations)
+ }
+ if ($Reservations -eq 0) {
+  $compilerDirectory = ($resolved | Where-Object { $_ -like 'compiler.path=*' } | Select-Object -First 1).Substring('compiler.path='.Length)
+  $compilerPrefix = ($resolved | Where-Object { $_ -like 'compiler.prefix=*' } | Select-Object -First 1).Substring('compiler.prefix='.Length)
+  $nmCommand = Join-Path $compilerDirectory ($compilerPrefix + 'nm')
+  if (!(Test-Path -LiteralPath $nmCommand)) { $nmCommand += '.exe' }
+  $symbols = & $nmCommand --demangle --defined-only (Join-Path $compiled 'MakerspaceReader.ino.elf')
+  if ($LASTEXITCODE -ne 0) { throw 'Cannot verify disabled reservation symbols' }
+  if ($symbols -match '\breservation::|audio::(?:jeopardy|donkeyKongStart|\w*Reservation|\w*Jeopardy|\w*DonkeyKongStart)|audio::Sequencer::(?:suspend|resume)') {
+   throw 'Disabled firmware contains reservation code or melody tables'
+  }
+ }
  $profile | ConvertTo-Json | Set-Content (Join-Path $output 'profile.json')
 } finally { Pop-Location }

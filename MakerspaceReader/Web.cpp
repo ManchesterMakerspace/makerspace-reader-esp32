@@ -2,6 +2,7 @@
 #include "ConnectivityPolicy.h"
 #include "BuildInfo.h"
 #include "Reader.h"
+#include "ReservationService.h"
 #include "secrets.h"
 #include <ESPAsyncWebServer.h>
 #include <ETH.h>
@@ -123,6 +124,9 @@ void webSetup() {
     d["role"] = configuration["role"];
     d["deviceId"] = DEVICE_ID;
     buildStatistics(d);
+#if READER_ENABLE_RESERVATIONS
+    reservation::stats(d["reservations"].to<JsonObject>());
+#endif
     d["uptimeSeconds"] = millis() / 1000;
     d["freeHeap"] = ESP.getFreeHeap();
     d["freePSRAM"] = ESP.getFreePsram();
