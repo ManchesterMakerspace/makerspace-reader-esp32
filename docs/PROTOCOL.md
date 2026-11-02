@@ -1,5 +1,8 @@
 # Reader protocol and persistent storage
 
+The optional reservation protocol and encrypted attendance journal are documented
+in [Tool reservations](RESERVATIONS.md). Reservation MQTT hints do not invalidate access.
+
 ## Meaning of “the API”
 
 The API is **ts-data-api**, the Node HTTP service in the sibling project. Its /reader/v1 routes use the official MongoDB Node driver with server-held Atlas credentials. The ESP32 never runs a MongoDB driver, stores an Atlas password, or receives permission to run arbitrary database queries.

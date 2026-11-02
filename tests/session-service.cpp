@@ -1,3 +1,4 @@
+#define READER_ENABLE_RESERVATIONS 0
 #include "session-fakes/Reader.h"
 #include "session-fakes/LittleFS.h"
 #include <iostream>

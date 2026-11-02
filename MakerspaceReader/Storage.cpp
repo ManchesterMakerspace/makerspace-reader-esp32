@@ -153,12 +153,12 @@ bool decodeHex(const String &s, uint8_t *out, size_t n) {
   }
   return true;
 }
-static bool cacheFailure(const String &path, const char *operation) {
+static bool cacheFailure(const String &path, const char *operation, bool critical = true) {
   log_e("Cache %s failed: %s", operation, path.c_str());
-  storageOK = false;
+  if (critical) storageOK = false;
   return false;
 }
-bool sealWrite(const String &path, const String &data) {
+bool sealWrite(const String &path, const String &data, bool critical) {
   Lock lock(fsMutex);
   uint8_t iv[12], tag[16];
   if (!cacheKeyReady)
@@ -184,31 +184,31 @@ bool sealWrite(const String &path, const String &data) {
   }
   File f = LittleFS.open(path + ".tmp", "w");
   if (!f)
-    return cacheFailure(path, "open for write");
+    return cacheFailure(path, "open for write", critical);
   bool ok = f.write(iv, 12) == 12 && f.write(tag, 16) == 16 &&
             f.write(cipher.data(), cipher.size()) == cipher.size();
   f.flush();
   f.close();
   if (!ok)
-    return cacheFailure(path, "write");
+    return cacheFailure(path, "write", critical);
   if (!LittleFS.rename(path + ".tmp", path))
-    return cacheFailure(path, "rename");
+    return cacheFailure(path, "rename", critical);
   return true;
 }
-bool sealRead(const String &path, String &data) {
+bool sealRead(const String &path, String &data, bool critical) {
   Lock lock(fsMutex);
   File f = LittleFS.open(path, "r");
   if (!f || f.size() < 28 || f.size() > 524288)
-    return cacheFailure(path, "open/read size validation");
+    return cacheFailure(path, "open/read size validation", critical);
   uint8_t iv[12], tag[16];
   if (!cacheKeyReady)
     return cacheFailure(path, "key unavailable");
   if (f.read(iv, 12) != 12 || f.read(tag, 16) != 16)
-    return cacheFailure(path, "header read");
+    return cacheFailure(path, "header read", critical);
   size_t n = f.size() - 28;
   std::vector<uint8_t> cipher(n), plain(n + 1);
   if (f.read(cipher.data(), n) != n)
-    return cacheFailure(path, "read");
+    return cacheFailure(path, "read", critical);
   f.close();
   mbedtls_gcm_context ctx;
   mbedtls_gcm_init(&ctx);
@@ -219,7 +219,7 @@ bool sealRead(const String &path, String &data) {
   mbedtls_gcm_free(&ctx);
   if (rc) {
     log_e("Cache cryptographic operation failed: rc=%d", rc);
-    return cacheFailure(path, "encryption/authentication");
+    return cacheFailure(path, "encryption/authentication", critical);
   }
   data = String((const char *)plain.data(), n);
   return true;

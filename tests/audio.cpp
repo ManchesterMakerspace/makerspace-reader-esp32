@@ -163,5 +163,23 @@ int main() {
   b.play(MelodyId::MarioDied); // Test resolver returns an invalid zero-duration note.
   assert(restPlayer.service(b.snapshot(), restDevice) == idleWait);
   assert(!restPlayer.active() && restDevice.calls.back().off);
+#if READER_ENABLE_RESERVATIONS
+  checkMelody(MelodyId::DonkeyKongStart,
+    {262,294,311,262,494,523,494,523,494,523,494,523,494,523,494,523,494,523},
+    {880,280,630,530,80,80,80,80,80,80,80,80,80,80,80,80,80,1480},20);
+  Mailbox warningBox; FakeDevice warningDevice; Sequencer warning;
+  assert(warningBox.play(MelodyId::Jeopardy));
+  warning.service(warningBox.snapshot(),warningDevice);
+  assert(warning.service(warningBox.snapshot(),warningDevice)==500);
+  warningDevice.now+=100;
+  assert(warning.suspend(warningDevice)==Result::Ok && !warning.playing());
+  warningDevice.now+=10000;
+  assert(warning.resume(warningDevice)==Result::Ok && warning.playing());
+  assert(warningDevice.calls.back().note.durationMs==340);
+  assert(warning.service(warningBox.snapshot(),warningDevice)==400);
+  warningDevice.now+=400;
+  assert(warning.service(warningBox.snapshot(),warningDevice)==500);
+  assert(warningDevice.calls.back().note.frequencyHz==698);
+#endif
   std::cout << "Audio melodies, timing, replacement, volume, rests and failures passed\n";
 }

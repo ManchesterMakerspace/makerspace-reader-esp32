@@ -1,6 +1,7 @@
 #include "Connectivity.h"
 #include "Display.h"
 #include "Reader.h"
+#include "ReservationService.h"
 #include <ETH.h>
 #include <esp_timer.h>
 
@@ -62,6 +63,9 @@ static void task(void *) {
       s.relayDeadlineMs = relayDeadline / 1000;
       s.relayStartedMs = relayStartedUs / 1000;
       toolDisplayStatus(s);
+#if READER_ENABLE_RESERVATIONS
+      reservation::displayStatus(s);
+#endif
       xSemaphoreGive(stateMutex);
       s.net = networkHasIP();
       // No state or mailbox lock is held during backend I/O.

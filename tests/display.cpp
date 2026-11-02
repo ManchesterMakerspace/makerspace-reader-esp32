@@ -249,5 +249,27 @@ int main() {
   presenter.render(backend, f); // Restore a prior frame after a partially applied new one.
   assert(backend.writes == 3);
   NullBackend absent; presenter.render(absent, f);
+#if READER_ENABLE_RESERVATIONS
+  Model reservations;
+  auto reserved=healthy(); reserved.tool=reserved.relay=true;
+  reserved.reservationPresent=reserved.reservationCountdown=reserved.reservationOwn=true;
+  reserved.reservationDeadline=reserved.utcMs+3661000;
+  std::strcpy(reserved.userName,"Ada L");
+  auto countdown=reservations.frame(reserved,20000);
+  assert(std::string(countdown.row2)=="Ends in 01:01:01");
+  reserved.reservationOwn=false; reserved.reservationDue=true;
+  assert(std::string(reservations.frame(reserved,20000).row2)=="Reservation due ");
+  assert(std::string(reservations.frame(reserved,24000).row2)=="Next in 00:00:00");
+  reserved.reservationPlaying=true;
+  assert(reservations.frame(reserved,20000).color==red);
+  reserved.reservationPlaying=false; reserved.reservationDue=false;
+  reserved.kickPending=true;
+  assert(std::string(reservations.frame(reserved,20000).row2)!="Next in 01:01:01");
+  reserved.kickPending=false; reserved.relay=false;
+  reserved.reservationStart=reserved.utcMs; reserved.reservationEnd=reserved.utcMs+3600000;
+  std::strcpy(reserved.reservationName,"Ada L");
+  assert(std::string(reservations.frame(reserved,24000).row1).find("Now: Ada L")==0);
+  assert(std::string(reservations.frame(reserved,32000).row1).find("Now: Ada L")!=0);
+#endif
   std::cout << "Display layout, messages, expiry, enrollment, DST, timing and backend checks passed\n";
 }

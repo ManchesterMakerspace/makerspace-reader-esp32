@@ -1,9 +1,14 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include "ReservationConfig.h"
 
 namespace audio {
-enum class MelodyId : uint8_t { None, Coin, MarioDied, PowerUp };
+enum class MelodyId : uint8_t { None, Coin, MarioDied, PowerUp
+#if READER_ENABLE_RESERVATIONS
+  , DonkeyKongStart, Jeopardy
+#endif
+};
 struct Note {
   uint16_t frequencyHz;
   uint16_t durationMs;
@@ -46,6 +51,10 @@ class Sequencer {
   uint8_t volume = 2;
   bool stopping = false, waiting = false;
   int64_t nextAt = 0;
+#if READER_ENABLE_RESERVATIONS
+  bool paused = false;
+  int64_t pausedAt = 0, noteUntil = 0;
+#endif
   void abort();
 public:
   explicit Sequencer(MelodyLookup source = melody) : lookup(source) {}
@@ -53,11 +62,21 @@ public:
   // All elapsed time comes from Device's monotonic clock, including I2C latency.
   uint32_t service(const Request &, Device &);
   bool active() const { return stopping || score.count != 0; }
+#if READER_ENABLE_RESERVATIONS
+  bool playing() const { return score.count && index && !paused; }
+  Result suspend(Device &);
+  Result resume(Device &);
+#endif
 };
 
 void setup();
 // True means recorded, not necessarily audible. False: disabled/invalid request.
 bool play(MelodyId, uint8_t volume = 2);
 void stop();
+#if READER_ENABLE_RESERVATIONS
+bool playReservation(MelodyId);
+void cancelReservation(MelodyId id = MelodyId::None);
+MelodyId reservationPlaying();
+#endif
 Device &qwiicDevice();
 } // namespace audio

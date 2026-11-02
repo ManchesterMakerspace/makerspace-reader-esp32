@@ -4,6 +4,14 @@ Push-Location $readerRoot
 try {
  & (Join-Path $readerRoot 'tests/flash-profile.ps1')
  New-Item -ItemType Directory -Force .test-build | Out-Null
+ & g++ -std=c++11 -Wall -Wextra -Werror tests/reservations.cpp MakerspaceReader/Reservation.cpp -o .test-build/reservation-tests.exe
+ if ($LASTEXITCODE -ne 0) { throw 'Reservation test compilation failed' }
+ & ./.test-build/reservation-tests.exe
+ if ($LASTEXITCODE -ne 0) { throw 'Reservation tests failed' }
+ & g++ -std=c++11 -Wall -Wextra -Werror -DREADER_ENABLE_RESERVATIONS=0 tests/reservations-disabled.cpp MakerspaceReader/Reservation.cpp MakerspaceReader/Audio.cpp MakerspaceReader/Display.cpp -o .test-build/reservations-disabled.exe
+ if ($LASTEXITCODE -ne 0) { throw 'Reservation compile-out failed' }
+ & ./.test-build/reservations-disabled.exe
+ if ($LASTEXITCODE -ne 0) { throw 'Reservation compile-out regression failed' }
  & g++ -std=c++11 -Wall -Wextra -Werror tests/connectivity.cpp -o .test-build/connectivity-tests.exe
  if ($LASTEXITCODE -ne 0) { throw 'Connectivity test compilation failed' }
  & ./.test-build/connectivity-tests.exe
@@ -38,10 +46,20 @@ try {
  & ./.test-build/audio-backend-tests.exe
  if($LASTEXITCODE -ne 0){throw 'Audio backend tests failed'}
  Copy-Item MakerspaceReader/AudioService.cpp .test-build/AudioService.cpp -Force
+ Copy-Item MakerspaceReader/ReservationService.cpp .test-build/ReservationService.cpp -Force
+ Copy-Item MakerspaceReader/ReservationService.h .test-build/ReservationService.h -Force
+ & g++ -std=c++11 -Wall -Wextra -Werror -I tests/reservation-fakes -I MakerspaceReader -I .arduino/libraries/ArduinoJson/src tests/reservation-service.cpp MakerspaceReader/Reservation.cpp -o .test-build/reservation-service.exe
+ if($LASTEXITCODE -ne 0){throw 'Reservation service compilation failed'}
+ & ./.test-build/reservation-service.exe
+ if($LASTEXITCODE -ne 0){throw 'Reservation service tests failed'}
  & g++ -std=c++11 -Wall -Wextra -Werror -I tests/audio-fakes -I MakerspaceReader tests/audio-service.cpp .test-build/AudioService.cpp MakerspaceReader/Audio.cpp -o .test-build/audio-service-tests.exe
  if($LASTEXITCODE -ne 0){throw 'Audio service test compilation failed'}
  & ./.test-build/audio-service-tests.exe
  if($LASTEXITCODE -ne 0){throw 'Audio service tests failed'}
+ & g++ -std=c++11 -Wall -Wextra -Werror -I tests/audio-fakes -I MakerspaceReader tests/reservation-audio-service.cpp .test-build/AudioService.cpp MakerspaceReader/Audio.cpp -o .test-build/reservation-audio-service.exe
+ if($LASTEXITCODE -ne 0){throw 'Reservation audio service compilation failed'}
+ & ./.test-build/reservation-audio-service.exe
+ if($LASTEXITCODE -ne 0){throw 'Reservation audio service tests failed'}
  & g++ -std=c++11 -Wall -Wextra -Werror tests/display.cpp MakerspaceReader/Display.cpp -o .test-build/display-tests.exe
  if($LASTEXITCODE -ne 0){throw 'Display test compilation failed'}
  & ./.test-build/display-tests.exe

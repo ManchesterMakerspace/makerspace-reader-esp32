@@ -1,5 +1,8 @@
 # Optional display service
 
+For Tool-mode reservation rotation, countdowns, red flashes and playback overrides,
+see [Tool reservations](RESERVATIONS.md). These presentations never change relay state.
+
 The LCD is optional. The reader still authorizes cards, drives the relay, records events and sounds the buzzer without it. Only DisplaySerLcd.cpp includes SerLCD.h.
 
 ## Screens and timing

@@ -1,6 +1,7 @@
 #include "Connectivity.h"
 #include "BuildInfo.h"
 #include "Reader.h"
+#include "ReservationService.h"
 #include "Display.h"
 #include "Audio.h"
 #include "Policy.h"
@@ -125,6 +126,9 @@ void readerSetup() {
     log_e("Firmware flash profile does not match installed partitions");
   } else initializeStorage();
   if (cacheKeyReady) { restoreToolStatus(); recoverToolSession(); }
+#if READER_ENABLE_RESERVATIONS
+  if (cacheKeyReady) { reservation::setup(); reservation::recoverSessionEnd(); }
+#endif
   if (configuration["name"].isNull()) {
     configuration["name"] = DEVICE_ID;
     configuration["role"] = "test";
@@ -176,6 +180,9 @@ extern void otaWatchdog();
 void readerLoop() {
   serviceConnectivity();
   if (cacheKeyReady) serviceToolSession();
+#if READER_ENABLE_RESERVATIONS
+  if (cacheKeyReady) reservation::service();
+#endif
 #if CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
   if (pendingBootValidation && millis() > 30000 && productionReady && storageOK && nfcOK) {
     if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
