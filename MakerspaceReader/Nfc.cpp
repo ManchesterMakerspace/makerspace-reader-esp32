@@ -1,3 +1,4 @@
+#include "HardwareDiagnostics.h"
 #include "FlashProfile.h"
 #include "secrets.h"
 #include "RefreshConfig.h"
@@ -11,7 +12,7 @@
 #include <Wire.h>
 #include <esp_timer.h>
 #include <mbedtls/sha256.h>
-static constexpr uint8_t NFC_IRQ = 17, NFC_RESET = 18;
+static constexpr uint8_t NFC_IRQ = readerBoard::nfcIrq, NFC_RESET = readerBoard::nfcReset;
 static Electroniccats_PN7150 nfc(NFC_IRQ, NFC_RESET, 0x28, PN7160, &Wire);
 static std::atomic<nfcProtocol::Controller> controller(nfcProtocol::Controller::none);
 static TaskHandle_t nfcTaskHandle = nullptr;
@@ -380,10 +381,13 @@ static void scan(const String &uid, bool classic) {
 static bool probe(uint8_t address) {
   for (int attempt = 0; attempt < 3; ++attempt) {
     Wire.beginTransmission(address);
-    if (Wire.endTransmission() == 0)
+    if (Wire.endTransmission() == 0) {
+      hardwareResponding(address,true);
       return true;
+    }
     delay(2); // Also allow a sleeping I2C controller to wake.
   }
+  hardwareResponding(address,false);
   return false;
 }
 static bool initializeNfc() {
@@ -402,7 +406,7 @@ static bool initializeNfc() {
     log_i("I2C device found: PN7160 at 0x28");
     pinMode(NFC_IRQ, INPUT_PULLDOWN);
     attachInterrupt(NFC_IRQ, nfcInterrupt, RISING);
-    nfc.setI2CPins(1, 2);
+    nfc.setI2CPins(readerBoard::sda, readerBoard::scl);
     nfc.setVerboseTrace(false);
     nfc.setPn7160FixedVbat3V3(false);
     ok =
@@ -413,8 +417,12 @@ static bool initializeNfc() {
     attachInterrupt(NFC_IRQ, nfcInterrupt, FALLING);
     ok = pn532.begin() && pn532.startDetection();
   }
-  Wire.setClock(100000);
-  Wire.setTimeOut(50);
+  Wire.setClock(readerBoard::i2cHz);
+  Wire.setTimeOut(readerBoard::i2cTimeoutMs);
+#ifdef ARDUINO
+  hardwareInitialized(0x28,ok,controller==nfcProtocol::Controller::pn7160);
+  hardwareInitialized(0x24,ok,controller==nfcProtocol::Controller::pn532);
+#endif
   if (ok)
     log_i("NFC reader initialized successfully: %s", nfcControllerName());
   else if (controller == nfcProtocol::Controller::none)
@@ -444,6 +452,8 @@ void nfcTask(void *) {
       continue;
     }
     if (!nfcOK) {
+      if(controller!=nfcProtocol::Controller::none)
+        hardwareInitialized(controller==nfcProtocol::Controller::pn7160?0x28:0x24,false);
       vTaskDelay(pdMS_TO_TICKS(3000));
       Lock i(i2cMutex);
       nfcOK = initializeNfc();

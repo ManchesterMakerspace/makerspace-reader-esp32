@@ -2,7 +2,7 @@
 #include "display-fakes/Wire.h"
 #include <cstring>
 #include <iostream>
-bool busBusy = true, busHeld = false, lcdPresent = false;
+bool busBusy = true, busHeld = false, lcdPresent = false, failBegin = false;
 unsigned begins = 0, colors = 0, rows = 0;
 uint32_t lastColor = 0;
 char lastRows[2][17] = {};
@@ -15,9 +15,11 @@ int main() {
   Model model; Status s;
   Frame f = model.frame(s, 0);
   assert(absent && absent->draw(f) && begins == 0 && rows == 0);
-  lcdPresent = true;
+  lcdPresent=true; failBegin=true;
+  assert(detectBackend()==absent && begins==1 && !busHeld);
+  failBegin=false; lcdPresent = true;
   Backend *lcd = detectBackend();
-  assert(lcd && begins == 1);
+  assert(lcd && begins == 2);
   busBusy = true;
   assert(!lcd->draw(f) && rows == 0 && colors == 0);
   busBusy = false;

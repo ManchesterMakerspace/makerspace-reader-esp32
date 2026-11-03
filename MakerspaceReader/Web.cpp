@@ -1,3 +1,4 @@
+#include "HardwareDiagnostics.h"
 #include "Connectivity.h"
 #include "ConnectivityPolicy.h"
 #include "BuildInfo.h"
@@ -5,11 +6,12 @@
 #include "ReservationService.h"
 #include "secrets.h"
 #include <ESPAsyncWebServer.h>
-#include <ETH.h>
+
 #include <ElegantOTA.h>
 #include <LittleFS.h>
 #include <esp_flash_encrypt.h>
 #include <esp_secure_boot.h>
+#include <esp_heap_caps.h>
 static AsyncWebServer server(80);
 static std::atomic<uint32_t> otaActivity(0);
 extern bool productionReady;
@@ -88,9 +90,10 @@ void webSetup() {
   static_assert(sizeof(WEB_USERNAME) > 1 && sizeof(WEB_PASSWORD) > 16,
                 "Nonempty username and long password required");
   server.addMiddleware([](AsyncWebServerRequest *r, ArMiddlewareNext next) {
-    if (connectivity::provisioningPath(r->url().c_str()) &&
-        !connectivity::manualProvisioningAllowed(wifiRadioActive(), ETH.linkUp() && ETH.hasIP() && uint32_t(ETH.localIP()) != 0,
-          r->client() && r->client()->localIP() == ETH.localIP())) {
+    if (!connectivity::configTransportAllowed(r->url().c_str(), r->method()==HTTP_GET, r->method()==HTTP_POST,
+        readerBoard::configOnWifi, wifiRadioActive(), ethernetHasIP(),
+        r->client() && r->client()->localIP().toString()==ethernetLocalAddress(),
+        networkHasIP() && r->client() && r->client()->localIP().toString()==networkAddress())) {
       r->send(403,"text/plain","Manual provisioning requires Ethernet with Wi-Fi fully off");
       return;
     }
@@ -130,11 +133,13 @@ void webSetup() {
     d["uptimeSeconds"] = millis() / 1000;
     d["freeHeap"] = ESP.getFreeHeap();
     d["freePSRAM"] = ESP.getFreePsram();
+    d["internalHeapMinimum"] = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    d["internalHeapLargestBlock"] = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     d["ip"] = networkAddress();
     d["networkTransport"] = networkTransport();
     d["wifiRadioActive"] = wifiRadioActive();
-    d["manualProvisioningAllowed"] = !wifiRadioActive() && ETH.linkUp() && ETH.hasIP() && uint32_t(ETH.localIP()) != 0;
-    d["ethernet"] = ETH.linkUp() && ETH.hasIP() && uint32_t(ETH.localIP()) != 0;
+    d["manualProvisioningAllowed"] = (readerBoard::configOnWifi && networkHasIP()) || (!wifiRadioActive() && ethernetHasIP());
+    d["ethernet"] = ethernetHasIP();
     d["api"] = bool(apiOK);
     d["mqtt"] = bool(mqttOK);
     d["nfc"] = bool(nfcOK);
@@ -187,6 +192,7 @@ void webSetup() {
     out += "<form method='post' action='/enrollment/disable'><input type='hidden' name='csrf' "
            "value='" +
            csrf + "'><button>Disable enrollment locally now</button></form>";
+    out += "<h2>Hardware</h2><pre style='white-space:pre-wrap;overflow-wrap:anywhere'>" + esc(hardwareReport()) + "</pre>";
     page(r, "Configuration", out);
   });
   auto csrfOK = [](AsyncWebServerRequest *r) {

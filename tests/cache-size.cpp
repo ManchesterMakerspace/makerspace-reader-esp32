@@ -9,12 +9,13 @@ int main() {
   auto a = d["cards"].to<JsonArray>();
   for (int i = 0; i < int(readerProfile::cards); i++) {
     auto o = a.add<JsonObject>();
-    o["uid"] = std::string(20, 'A');
-    o["id"] = std::string(24, 'a');
-    o["member"] = std::string(24, 'b');
-    o["holder"] = std::string(256, 'h');
-    o["firstName"] = std::string(64, 'f');
-    o["lastInitial"] = std::string(4, 'l');
+    const auto suffix=std::to_string(i);
+    o["uid"] = std::string(20-suffix.size(), 'A')+suffix;
+    o["id"] = std::string(24-suffix.size(), 'a')+suffix;
+    o["member"] = std::string(24-suffix.size(), 'b')+suffix;
+    o["holder"] = std::string(250-suffix.size(), 'h')+"\xE6\xB8\xAC\xE8\xA9\xA6"+suffix;
+    o["firstName"] = std::string(60-suffix.size(), 'f')+"\xF0\x9F\x94\xA7"+suffix;
+    o["lastInitial"] = "\xF0\x9F\x94\xA7";
     o["managesTool"] = true;
     o["status"] = std::string(64, 's');
     o["expiry"] = INT64_MAX;
@@ -26,8 +27,9 @@ int main() {
   auto grants = d["grants"].to<JsonArray>();
   for (int i = 0; i < int(readerProfile::grants); i++) {
     auto o = grants.add<JsonObject>();
-    o["member"] = std::string(24, 'b');
-    o["id"] = std::string(24, 'c');
+    const auto suffix=std::to_string(i);
+    o["member"] = std::string(24-suffix.size(), 'b')+suffix;
+    o["id"] = std::string(24-suffix.size(), 'c')+suffix;
     o["until"] = INT64_MAX;
   }
   d["config"]["name"] = std::string(48, 'n');

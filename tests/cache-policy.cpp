@@ -45,8 +45,8 @@ void retention() {
  for(unsigned i=0;i<100;i++){auto c=card(std::to_string(i));c.lastUsed=i;add(c);}
  cards.at("0").managesTool=true;activeUid="1";
  trimCardCache();
- assert(snapshotRequestedUids().size()<=65);
- if(readerProfile::compact){assert(cards.size()==66);assert(cards.count("0")&&cards.count("1")&&cards.count("99"));assert(!cards.count("2"));assert(grants.size()==cards.size());}
+ assert(snapshotRequestedUids().size()<=readerProfile::cards);
+ if(readerProfile::compact){assert(cards.size()==readerBoard::recentCards+2);assert(cards.count("0")&&cards.count("1")&&cards.count("99"));assert(!cards.count("2"));assert(grants.size()==cards.size());}
  else assert(cards.size()==100);
 }
 void scopedRace() {
@@ -131,6 +131,17 @@ void persistenceFailures() {
  for(unsigned i=0;i<=readerProfile::grants;i++){Grant g;g.member=std::to_string(i);grants[g.member]=g;}
  unsigned before=writes;assert(!saveState());assert(writes==before && cacheCapacityExceeded);
 }
+void reducedSnapshot() {
+ reset(); add(card("before")); assert(saveState());
+ const auto key=std::string("/state")+std::to_string(prefs.getUInt("generation",0)%2);
+ files[key]=std::string(readerProfile::snapshotBytes+1,'x');
+ cards.clear();grants.clear();const auto preserved=files;
+ loadState();assert(cacheCapacityExceeded && refreshNeeded && !storageOK && !maintenance);
+ assert(cards.empty() && files==preserved); // No format, replacement or fallback admission.
+ auto d=snapshot();snapshotCard(d,card("fresh"));
+ mergeCacheSnapshot(d.as<JsonVariantConst>(),{},2,false);assert(saveState(true));
+ assert(!cacheCapacityExceeded && storageOK);
+}
 void gatewayCapacity() {
  JsonDocument error;error["message"]="Eligible card cache capacity exceeded";
  assert(cacheCapacityResponse("/reader/v1/snapshot/recent",409,error.as<JsonVariantConst>()));
@@ -142,4 +153,4 @@ void gatewayCapacity() {
  assert(!cacheCapacityResponse("/reader/v1/snapshot/recent",409,error.as<JsonVariantConst>()));
  error.clear();assert(!cacheCapacityResponse("/reader/v1/snapshot",409,error.as<JsonVariantConst>()));
 }
-int main(){gatewayCapacity();retention();scopedRace();authoritativeRemoval();overflowRecovery();persistenceFailures();std::cout<<"Cache merge races, authoritative removals, pinning, bounded recovery and snapshot persistence passed (profile "<<READER_PROFILE_MB<<")\n";}
+int main(){reducedSnapshot();gatewayCapacity();retention();scopedRace();authoritativeRemoval();overflowRecovery();persistenceFailures();std::cout<<"Cache merge races, authoritative removals, pinning, bounded recovery and snapshot persistence passed (profile "<<READER_PROFILE_MB<<")\n";}

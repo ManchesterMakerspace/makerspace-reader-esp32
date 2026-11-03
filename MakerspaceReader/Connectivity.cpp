@@ -1,11 +1,19 @@
+#include "BoardConfig.h"
 #include "Reader.h"
 #include "Connectivity.h"
 #include "ConnectivityPolicy.h"
 #include "secrets.h"
+#if READER_HAS_ETHERNET
 #include <ETH.h>
-#include <SPI.h>
 #include <esp_netif.h>
+#endif
+#if READER_ETHERNET_SPI
+#include <SPI.h>
+#endif
 #include <bootloader_random.h>
+#if !READER_HAS_ETHERNET && (!defined(WIFI_SSID) || !defined(WIFI_PSK))
+#error "Wi-Fi-only reader requires WIFI_SSID and WIFI_PSK"
+#endif
 #if defined(WIFI_SSID) != defined(WIFI_PSK)
 #error "Define both WIFI_SSID and WIFI_PSK, or neither"
 #endif
@@ -24,7 +32,11 @@ connectivity::Policy policy;
 uint32_t lastCheck=0;
 std::atomic<int> transport(0);
 bool ethernetReady() {
+#if READER_HAS_ETHERNET
   return ethernetStarted && ETH.linkUp() && ETH.hasIP() && uint32_t(ETH.localIP()) != 0;
+#else
+  return false;
+#endif
 }
 bool wirelessReady() {
 #if defined(WIFI_SSID) && defined(WIFI_PSK)
@@ -33,8 +45,13 @@ bool wirelessReady() {
   return false;
 #endif
 }
+#if READER_HAS_ETHERNET
 void startEthernet() {
-  ethernetStarted=ETH.begin(ETH_PHY_W5500,1,14,10,9,SPI);
+#if READER_ETHERNET_SPI
+  ethernetStarted=ETH.begin(READER_ETH_PHY,readerBoard::ethAddress,readerBoard::ethCs,readerBoard::ethIrq,readerBoard::ethReset,SPI);
+#else
+  ethernetStarted=ETH.begin(READER_ETH_PHY,readerBoard::ethAddress,readerBoard::ethMdc,readerBoard::ethMdio,readerBoard::ethPower,READER_ETH_CLOCK);
+#endif
   if(!ethernetStarted) { ETH.end(); log_e("Ethernet initialization failed; retrying in 30 seconds"); }
 }
 void retryEthernetDhcp() {
@@ -57,6 +74,7 @@ void retryEthernetDhcp() {
   if (rc != ESP_OK && rc != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED)
     log_e("Ethernet DHCP restart failed");
 }
+#endif
 void startWifi() {
 #if defined(WIFI_SSID) && defined(WIFI_PSK)
   if (ethernetReady()) return; // Avoid starting RF if DHCP completed during this tick.
@@ -72,6 +90,7 @@ void startWifi() {
   log_i("Connecting Wi-Fi fallback");
 #endif
 }
+#if READER_HAS_ETHERNET
 void stopWifi() {
 #if defined(WIFI_SSID) && defined(WIFI_PSK)
   WiFi.setAutoReconnect(false);
@@ -83,21 +102,38 @@ void stopWifi() {
   } else log_e("Wi-Fi shutdown failed; will retry");
 #endif
 }
+#endif
 }
-void connectivitySetup() { startEthernet(); serviceConnectivity(); }
+void connectivitySetup() {
+#if READER_HAS_ETHERNET
+ startEthernet();
+#endif
+ serviceConnectivity();
+}
 void serviceConnectivity() {
   uint32_t now=millis();
   if (lastCheck && uint32_t(now-lastCheck)<1000) return;
   lastCheck=now;
-  bool ethernet=ethernetReady(), wireless=wirelessReady();
+  bool wireless=wirelessReady();
+#if READER_HAS_ETHERNET
+  bool ethernet=ethernetReady();
+#endif
+#if READER_HAS_ETHERNET
   auto action=policy.step(now,ethernetStarted,ethernetStarted && ETH.linkUp(),ethernet,wifiConfigured,radio,wireless);
+#else
+  auto action=policy.step(now,true,false,false,wifiConfigured,radio,wireless);
+#endif
+#if READER_HAS_ETHERNET
   if(action.retryEthernet) startEthernet();
   if(action.retryDhcp) retryEthernetDhcp();
+#endif
   if(action.startWifi) startWifi();
   int next=0;
+#if READER_HAS_ETHERNET
   if(ethernet && ETH.setDefault()) { next=1; if(action.stopWifi) stopWifi(); }
+#endif
 #if defined(WIFI_SSID) && defined(WIFI_PSK)
-  else if(wireless && WiFi.STA.setDefault()) next=2;
+  if(!next && wireless && WiFi.STA.setDefault()) next=2;
 #endif
   if(next!=transport) {
     transport=next;refreshNeeded=true;apiOK=false;
@@ -107,7 +143,9 @@ void serviceConnectivity() {
 bool networkHasIP() { return ethernetReady() || wirelessReady(); }
 bool wifiRadioActive() { return radio; }
 String networkAddress() {
+#if READER_HAS_ETHERNET
   if(transport == 1 && ethernetReady()) return ETH.localIP().toString();
+#endif
 #if defined(WIFI_SSID) && defined(WIFI_PSK)
   if(transport == 2 && wirelessReady()) return WiFi.localIP().toString();
 #endif
@@ -117,4 +155,13 @@ const char *networkTransport() {
   if (transport == 1 && ethernetReady()) return "ethernet";
   if (transport == 2 && wirelessReady()) return "wifi";
   return "offline";
+}
+
+bool ethernetHasIP() { return ethernetReady(); }
+String ethernetLocalAddress() {
+#if READER_HAS_ETHERNET
+ return ETH.localIP().toString();
+#else
+ return "0.0.0.0";
+#endif
 }

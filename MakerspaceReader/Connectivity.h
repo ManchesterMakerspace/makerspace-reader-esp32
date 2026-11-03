@@ -6,3 +6,6 @@ bool networkHasIP();
 bool wifiRadioActive();
 String networkAddress();
 const char *networkTransport();
+
+bool ethernetHasIP();
+String ethernetLocalAddress();

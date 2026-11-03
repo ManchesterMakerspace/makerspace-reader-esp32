@@ -44,6 +44,7 @@ bool saveState(bool authoritative) {
     storageOK = false;
     return false;
   }
+  if(measureMsgPack(d)>readerProfile::snapshotBytes) { Lock l(stateMutex); failCacheCapacity(); return false; }
   String serialized;
   serializeMsgPack(d, serialized);
   if (serialized.length() > readerProfile::snapshotBytes) {
@@ -81,7 +82,9 @@ void loadState() {
     return;
   String raw;
   if (!sealRead("/state" + String(generation % 2), raw)) {
-    lastError = "Cache authentication failed";
+    // Do not fall back to an unconfigured role while a reduced profile refreshes.
+    // Only an authoritative snapshot may clear this admission fence.
+    failCacheCapacity();
     storageOK = false;
     return;
   }
@@ -89,6 +92,7 @@ void loadState() {
   if (raw.length() > readerProfile::snapshotBytes || deserializeMsgPack(d, raw) || d["schema"].as<int>() != 1 || d["cards"].size() > readerProfile::cards ||
       d["grants"].size() > readerProfile::grants) {
     log_e("Cache snapshot schema, encoding or capacity validation failed");
+    failCacheCapacity();
     storageOK = false;
     return;
   }

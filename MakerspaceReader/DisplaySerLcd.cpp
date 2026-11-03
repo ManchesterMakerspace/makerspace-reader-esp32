@@ -1,3 +1,4 @@
+#include "HardwareDiagnostics.h"
 #include "Display.h"
 #include "Reader.h"
 #include <SerLCD.h>
@@ -44,8 +45,14 @@ Backend *detectBackend() {
   bool found = Wire.endTransmission() == 0;
   if (found) {
     present.begin();
-    log_i("I2C device found: SerLCD at 0x72");
+    // The library's begin() is void; confirm the device still ACKs afterward.
+    Wire.beginTransmission(0x72);
+    found=Wire.endTransmission()==0;
+    if(found) log_i("I2C device found: SerLCD at 0x72");
   }
+#ifdef ARDUINO
+  hardwareInitialized(0x72,found);
+#endif
   xSemaphoreGive(i2cMutex);
   return found ? static_cast<Backend *>(&present) : &absent;
 }

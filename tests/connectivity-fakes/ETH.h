@@ -1,7 +1,7 @@
 #pragma once
 #include "Arduino.h"
 #include "esp_netif.h"
-constexpr int ETH_PHY_W5500 = 0;
+constexpr int ETH_PHY_W5500 = 0, ETH_PHY_LAN8720=1, ETH_CLOCK_GPIO17_OUT=2;
 struct Ethernet {
   bool available=false, link=false, ip=false, defaultOK=true;
   bool begin(int,int,int,int,int,int) { calls.push_back("eth-start"); return available; }

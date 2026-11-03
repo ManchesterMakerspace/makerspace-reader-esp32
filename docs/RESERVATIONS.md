@@ -14,7 +14,7 @@ display fields and scores. Arduino CLI examples:
 ./scripts/build.ps1 -Reservations 0
 ```
 
-The disabled output is under `build/profile-16-no-reservations` (or the selected
+The disabled output is under `build/board-1-esp32s3/profile-16-no-reservations` (or the selected
 4/8 MB profile). For Arduino IDE edit the default in `ReservationConfig.h`; do not
 define the flag only in the `.ino`, since each `.cpp` is a separate translation unit.
 CI covers all flash sizes with/without reservations and optional Wi-Fi.
@@ -43,14 +43,16 @@ attendance obligation; an administrator may need to cancel the booking normally.
 ## Data and timing
 
 `GET /reader/v1/reservations` returns only the registered tool's approved bookings
-overlapping now or starting within four hours, including whole-shop reservations.
+overlapping now or starting within eight hours (`?hours=8&limit=16`), including whole-shop reservations.
 Group bookings already contain expanded physical tool IDs. Effective reservability
 includes the tool, its shop/groups and existing future bookings. A negative result
 is persisted and rechecked after 24 hours. Failed queries never create negative cache entries.
 
-Reads occur on boot/reconnect, MQTT hints and every minute. Pages contain 32 records;
-the device retains at most 64, reports incomplete inventory, and suspends claims and
-coverage checkpoints if the complete window cannot be represented. MQTT data is
+Reads occur on boot/reconnect, MQTT hints and every minute. Pages contain 16 records with a seventeenth-row lookahead;
+the device retains at most 16, reports incomplete inventory, and suspends claims and
+coverage checkpoints if the complete window cannot be represented. Older firmware
+retains the API defaults of four hours and 32 records per page. Four-hour countdowns
+and alerts, one-hour arrival eligibility and 15-/5-minute warnings are unchanged. MQTT data is
 only a hint; identity and times come from the authenticated API.
 
 The arrival interval is `[start - 60 minutes, start + 15 minutes]`, bounded by the
@@ -66,26 +68,25 @@ through that boundary. Offline devices defer release. Checkpoints cannot overtak
 pending attendance or unacknowledged session events. Corruption, audit loss, overflow,
 scope changes and missing coverage prevent absence-based release. Fees are retained.
 
-The encrypted `/reservations` journal holds tracked bookings, arrival associations,
-negative capability cache, coverage provenance and at most 64 pending attendance
-operations plus 64 pending releases. Releases have a separate durable queue so a
-full attendance backlog cannot lose a voluntary logoff or block a new tool session.
-The session ending remains open for retry if its release cannot be saved; after
-the handoff, releases survive subsequent check-ins and reboot independently.
-Up to 64 ended visits awaiting complete inventory retain their original check-in,
-ending and time interval in the same journal, independently of the active session.
-They are evaluated before new attendance and coverage checkpoints. A separate
-64-record association reserve preserves logoff links when unresolved monitoring
-fills the tracked-booking limit; a claim and its association commit together.
-If either reserve or durable storage is exhausted, work remains retryable instead
-of acknowledging a lost handoff. The journal retains its 64 KiB size limit.
-API acknowledgment precedes removal; replay is idempotent. Journal capacity/read
-failures mark reservation coverage uncertain without changing tool authorization.
-Changing tool/role starts a new coverage interval and preserves any existing loss
-uncertainty. Rails invalidates the old scope's checkpoints using its frozen reader
-configuration revision; a healthy reassignment can monitor new bookings normally.
-Failures of the shared cryptographic key/nonce mechanism still follow the existing
-storage safety policy. No reservation journal contains card credentials.
+The encrypted `/reservations` journal holds minimal reconciliation references,
+arrival/session associations, negative capability cache and coverage provenance.
+Names and descriptive text are not copied into durable references. Claims and
+releases share a 64-operation budget (16 without PSRAM); monitored references,
+associations and deferred ended visits share 64 slots (16 without PSRAM). Pending
+claims/releases remain until acknowledged. The journal ceiling is 64 KiB, or
+16 KiB without PSRAM. Required protocol reason codes remain intact.
+
+A profile reduction checks encrypted-file size before allocation and validates
+counts before loading. An oversized or damaged existing journal is preserved;
+reservation mutation suspends until compatible firmware can drain it. Capacity
+failures never invent attendance or prove abandonment. If a full/incompatible
+journal cannot capture a session ending, a persistent NVS `resGap` marker invalidates
+attendance coverage while ordinary tool use continues. Existing queued work stays
+intact; unrecorded arrivals/releases may need administrative reconciliation.
+The marker remains conservative across reboot and scope changes. Do not clear it
+without resolving the affected bookings. Transient write failures retain the
+existing durable session handoff for retry.
+
 
 ## Presentation
 
