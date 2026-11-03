@@ -98,3 +98,68 @@ backlog ordering with acknowledgment preservation. scripts/test.ps1 runs these
 cases, so the existing push/PR GitHub workflow includes them automatically.
 
 Spool-order fix validation: full host suite passed; final ESP32-S3 firmware build passed (1,134,620 bytes flash, 36,276 bytes static RAM). The incremental build includes the final empty-cursor ordering fix.
+
+
+## Board profiles, diagnostics and bounded synchronization (2026-11-02)
+
+Implemented in reader commit `10d2263` (board selection), with companion
+backward-compatible ts-data-api request bounds. The reader handbook is `AGENTS.md`;
+board ownership, build commands and wiring are documented in `README.md`.
+
+Executed checks:
+
+- `scripts/test.ps1` passed on Windows and Linux (WSL Ubuntu). Coverage includes
+  native/overridden board selection, incompatible targets/memory, missing QT Py
+  credentials, pin conflicts/output capability, memory budgets, W5500/RMII and
+  Wi-Fi-only routing, bounded hardware probing and shared diagnostics, driver
+  failure/selection/recovery, config transport aliases, cache pinning/merge races,
+  oversized snapshot refresh fencing, reservation overflow, queue bounds, journal
+  preservation and replay, relay, session, display and audio behavior.
+- Maximum-size fixtures include unique identifiers and bounded multibyte text:
+  24,127 MessagePack bytes for 32 cards/checkouts; 47,839 for 64/64; 211,315 for
+  300/150. These fit the 32/64/320 KiB ceilings.
+- ts-data-api `npm run build` and `npm run test:disposable` passed: **26 suites,
+  111 tests**. Windows MongoDB teardown has an explicit 30-second allowance.
+  Tests exercise UTF-8 response-byte conflicts, mandatory privileged records,
+  checkout limits, legacy defaults, eight-hour boundaries and 16/17 rows. Actual
+  four/eight-hour MongoDB query plans used the existing indexes, without collection
+  scans, and examined fewer than 20 documents in the representative fixture.
+- The 18-case board/flash/Wi-Fi/reservation matrix was exercised during development.
+  After the final cache and diagnostic corrections, all ten Wi-Fi-enabled
+  board/flash/feature builds below were repeated and their staged application
+  sources compared with the current checkout. Ethernet-only matrix builds preceded
+  those final common-code corrections; CI continues to cover all 18 combinations.
+- Every final build passed the actual binary partition-table check, including
+  labels, types, subtypes, offsets, sizes, encryption flags and absence of extra
+  TinyUF2 partitions. Disabled builds passed ELF reservation-symbol checks. QT Py
+  has no Ethernet/SPI initialization function; the generic SerLCD dependency still
+  contains an unused SPI transaction path, which is not selected by this app.
+
+Final-source firmware sizes (Wi-Fi configured; reservations ON / OFF):
+
+| Board / flash | ON bytes | ON headroom | OFF bytes | OFF headroom |
+| --- | ---: | ---: | ---: | ---: |
+| Waveshare / 4 MB | 1,479,280 | 13.18% | 1,429,664 | 16.10% |
+| Waveshare / 8 MB | 1,561,984 | 25.52% | 1,506,800 | 28.15% |
+| Waveshare / 16 MB | 1,562,000 | 62.76% | 1,506,816 | 64.07% |
+| Olimex ESP32-PoE / 4 MB | 1,482,944 | 12.97% | 1,431,232 | 16.00% |
+| QT Py S3 N4R2 / 4 MB | 1,412,384 | 17.11% | 1,362,352 | 20.05% |
+
+These use pinned ESP32 Arduino 3.3.12 and isolated placeholder-credential bench
+fixtures. Four-MB builds retain C++-only LTO and the unchanged 10% OTA requirement.
+These are validation artifacts, not provisioned production images. Partition
+layouts were not changed by this work.
+
+Still pending: physical W5500/LAN8710A/Wi-Fi acceptance, GPIO/relay timing, startup
+without USB, real peripheral failures and simultaneous NFC/display/audio/network
+activity, full-cache internal-heap minimum/largest-block measurements, power-loss
+and signed OTA tests, and real browser authentication/CSRF/responsive/accessibility
+acceptance. Host doubles and compilation do not establish those results. The
+runtime stats expose `internalHeapMinimum` and `internalHeapLargestBlock` for the
+commissioning run. SerLCD initialization is followed by an ACK check; visible LCD
+operation still needs physical confirmation.
+
+Deploy the compatible API before this firmware. No hardware was flashed, storage
+formatted, eFuses changed, service deployed or wiki published. Operator changes
+are held in `docs/wiki-board-profiles-draft.md`; use `docs/COMMISSIONING.md` for
+physical acceptance. Handbook links/paths and `git diff --check` were verified.
