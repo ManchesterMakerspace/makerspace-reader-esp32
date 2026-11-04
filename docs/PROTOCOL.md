@@ -23,7 +23,7 @@ Sector 1 is reserved in full:
 
 Access conditions permit data reads with A/B and writes with B; Key B is not readable. The expected digest is SHA-256(raw UID bytes || all 48 data bytes). A scan must complete the selected controller's Classic authentication exchange using Key A, read the three blocks and access bytes, and match the digest. Merely copying a UID fails. Reading and cloning the full credential after defeating Crypto1 remains possible: this format does not repair Classic cryptography.
 
-Only an enabled enrollment station can obtain pending Key B. The server generates and encrypts pending material before RF writes. Repeated begin calls return the same material. Blank factory-key sectors and partially written blocks matching that pending material can resume; unrelated nonblank sectors are not overwritten. After trailer replacement, the station reactivates the card and verifies reads using Key A before commit. Failed writes or lost connectivity leave a pending enrollment for a supervised retry. A damaged trailer may require replacing the card.
+An enabled enrollment station can obtain pending Key B through device APIs. The portal also supports explicitly authorized native Android enrollment through Rails session-authenticated endpoints. The server generates and encrypts pending material before RF writes. Repeated begin calls return the same material. Blank factory-key sectors and partially written blocks matching that pending material can resume; unrelated nonblank sectors are not overwritten. After trailer replacement, the station reactivates the card and verifies reads using Key A before commit. Failed writes or lost connectivity leave a pending enrollment for a supervised retry. A damaged trailer may require replacing the card.
 
 Enrollment transactions write fences on both the reader and assigned card, so concurrent station disable/reassignment/release cannot silently commit the old binding. Normal lookup requires the same card ObjectId, UID and member assignment as the active credential. Commit is an attestation by the trusted reader, not remote proof of RF possession.
 
@@ -260,3 +260,17 @@ board settings and inventory used by drivers. GET never probes I2C. Only QT Py
 permits configuration POSTs over its station Wi-Fi; authentication, CSRF, idle-relay
 and server approval remain required. Other provisioning/recovery routes and
 Ethernet-board writes retain their previous transport restrictions.
+
+
+## Portal native enrollment and reader fallback
+
+Rails stages native phone enrollments separately in nfc_card_enrollments, then
+atomically assigns the card and writes a gateway-compatible active
+nfc_card_credentials document after native readback. The sector layout, digest,
+lookup binding and reader authentication remain unchanged. Phones are authorized
+operators, not nfc_readers identities; native provenance uses enrolledByMemberId.
+
+The browser fallback assigns only the UID through existing Rails routes and directs
+the operator to present the card to an enrollment-enabled reader. That reader uses
+the existing begin/write/verify/commit flow. UID assignment never grants admission
+without a matching active protected credential. See Rails docs/card-assignment.md.
