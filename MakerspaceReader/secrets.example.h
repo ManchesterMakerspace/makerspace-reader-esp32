@@ -1,5 +1,7 @@
 #pragma once
 // Copy to secrets.h; never commit real credentials.
+// Alternatively copy this reader's generated header from the ts-data-api
+// deployment tool. Keep the same header/identity on rebuilds; preserve NVS/LittleFS.
 #define WEB_USERNAME "admin"
 #define WEB_PASSWORD "REPLACE_WITH_UNIQUE_LONG_PASSWORD"
 #define API_URL "https://reader-api.example.invalid"

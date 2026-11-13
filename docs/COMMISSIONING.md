@@ -4,6 +4,18 @@ No device has been flashed or physically tested by this implementation task. Com
 
 ## Provisioning order
 
+The companion ts-data-api `deploy/README.md` now defines the Compose deployment,
+20-calendar-year PKI, per-reader header generation, complete MQTT topic ACLs,
+private management HTTPS, and encrypted recovery workflow. Follow that runbook
+for server setup; the original provisioning checklist below still defines hardware
+acceptance. Its initial MQTT topic list is historical: use the generated ACLs,
+including tool/shop/session and reservation topics, for current firmware.
+
+For rebuild acceptance, restore the credential bundle and a consistent database
+snapshot into an isolated test network, preserve reader NVS/LittleFS, and verify
+the same enrolled card and immutable device ID with a dummy relay. Never reset
+nonce counters or erase NVS as a routine part of a firmware rebuild.
+
 1. Deploy ts-data-api with the reader environment settings, least-privilege Atlas access and the authenticated TLS gateway. Run scripts/reader-indexes.cjs after auditing existing reader names/fingerprints for duplicates.
 2. Issue a unique TLS client certificate per station. Register its lowercase SHA-256 DER fingerprint, immutable ObjectId, unique name, role, enabled flag and optional tool ObjectId in nfc_readers. Enrollment defaults off. Give the MQTT broker the same reader CA and an ACL allowing only activity/checkins writes and cards/# plus readers/all/invalidate reads.
 3. Configure the station's secrets.h. Leave CACHE_KEY_HEX undefined for per-device generation after production NVS encryption is provisioned, or supply a unique 64-hex-digit key. Preserve generated keys, counters and LittleFS during upgrades. Keep an existing compiled key unchanged until deliberate reprovisioning. The web password is distinct from certificates and the gateway secret.
