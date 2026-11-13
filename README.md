@@ -9,6 +9,12 @@ Arduino firmware for Waveshare ESP32-S3-ETH (OPI PSRAM), Olimex ESP32-PoE (4 MB 
 
 ## Build
 
+For a new API/gateway/broker installation and generated per-reader `secrets.h`, use
+the [ts-data-api deployment and recovery guide](https://github.com/ManchesterMakerspace/ts-data-api/blob/main/deploy/README.md).
+Its encrypted recovery bundle preserves server/card master keys and reader TLS
+identities. Rebuilds must also preserve this reader's NVS and LittleFS; the bundle
+does not export automatically generated on-device cache keys or nonce counters.
+
 On Windows with Arduino CLI installed:
 
 ```powershell

@@ -163,3 +163,20 @@ Deploy the compatible API before this firmware. No hardware was flashed, storage
 formatted, eFuses changed, service deployed or wiki published. Operator changes
 are held in `docs/wiki-board-profiles-draft.md`; use `docs/COMMISSIONING.md` for
 physical acceptance. Handbook links/paths and `git diff --check` were verified.
+
+# Deployment/recovery integration
+
+The companion ts-data-api deployment package now generates per-reader certificate
+headers, 20-year PKI, private management routing, and encrypted recovery bundles.
+Generated test credentials were compiled locally on 2026-11-12 for all three boards
+with reservations enabled and disabled, using the pinned setup in an isolated
+checkout. All six builds passed partition validation and the 10% OTA-headroom gate.
+Waveshare headroom was 62.69%/64.01%, Olimex 12.82%/15.85%, and QT Py 16.95%/19.89%
+(enabled/disabled). Disabled builds passed symbol exclusion and QT Py passed its
+Wi-Fi-only symbol checks. No hardware was flashed. The companion package includes
+a CI matrix for repeating these builds; that workflow has not run locally.
+
+PKI/export and disposable MongoDB recovery tests are reported by the companion
+repository. Physical reuse of an enrolled card after isolated restoration, relay
+acceptance, and signed production OTA still require the commissioning checklist.
+The matching wiki text is held in `wiki-deployment-recovery-draft.md` until release.
